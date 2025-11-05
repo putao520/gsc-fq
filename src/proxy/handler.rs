@@ -275,7 +275,7 @@ impl std::fmt::Display for PoolStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::Ipv4Addr;
 
     #[test]
     fn test_connection_handler_creation() {

@@ -116,13 +116,6 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
-    async fn test_signal_handler_creation() {
-        let handler = SignalHandler::new();
-        // Just test that it creates successfully
-        assert!(true);
-    }
-
-    #[tokio::test]
     async fn test_manual_shutdown_trigger() {
         let handler = SignalHandler::new();
 

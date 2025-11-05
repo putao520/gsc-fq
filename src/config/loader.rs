@@ -5,6 +5,26 @@ use std::path::Path;
 
 use crate::error::{AppError, ConfigError, Result};
 
+/// Built-in default configuration to avoid external file dependencies.
+const BUILTIN_DEFAULT_CONFIG: &str = r#"[server]
+bind_ip = "127.0.0.1"
+
+[[proxies]]
+local_port = 33100
+remote_host = "198.51.100.10"
+remote_port = 8080
+
+[[proxies]]
+local_port = 33200
+remote_host = "198.51.100.20"
+remote_port = 8080
+
+[[proxies]]
+local_port = 33300
+remote_host = "198.51.100.30"
+remote_port = 8080
+"#;
+
 /// TOML configuration file structure
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
@@ -43,8 +63,11 @@ impl ConfigFile {
         let mut warnings = Vec::new();
         let mut errors = Vec::new();
 
+        // 允许空的proxies列表 - 支持无配置文件启动
         if self.proxies.is_empty() {
-            return Err(ConfigError::MissingRequiredField("proxies".to_string()));
+            warnings.push(
+                "No proxy configurations found - server will start but no forwarding rules are active".to_string(),
+            );
         }
 
         if let Some(server) = self.server.as_mut() {
@@ -142,8 +165,17 @@ pub struct ConfigLoader;
 impl ConfigLoader {
     /// Load configuration from file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<ConfigFile> {
-        let config = Self::load_with_fallback(path).map_err(AppError::from)?;
-        Ok(config)
+        match Self::load_with_fallback(path) {
+            Ok(config) => Ok(config),
+            Err(ConfigError::ConfigFileNotFound(_)) => {
+                // 如果文件不存在，返回空配置而不是错误
+                Ok(ConfigFile {
+                    server: None,
+                    proxies: Vec::new(),
+                })
+            }
+            Err(e) => Err(AppError::from(e)),
+        }
     }
 
     /// Load configuration from string
@@ -211,8 +243,7 @@ impl ConfigLoader {
     /// Load default configuration
     /// 加载默认配置
     fn load_default_config_file() -> std::result::Result<ConfigFile, ConfigError> {
-        const DEFAULT_CONFIG: &str = include_str!("../../default.toml");
-        let (config, warnings) = Self::load_from_str_with_warnings(DEFAULT_CONFIG)?;
+        let (config, warnings) = Self::load_from_str_with_warnings(BUILTIN_DEFAULT_CONFIG)?;
         Self::emit_warnings(&warnings);
         Ok(config)
     }

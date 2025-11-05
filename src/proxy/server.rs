@@ -1,5 +1,5 @@
 use crate::config::loader::{ConfigLoader, ProxySection};
-use crate::error::{NetworkError, ProxyError, Result};
+use crate::error::{NetworkError, Result};
 use crate::proxy::handler::ConnectionHandler;
 use crate::{debug_println, error_println};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -53,10 +53,8 @@ impl ProxyServer {
     /// Start all proxy instances
     pub async fn start(&mut self) -> Result<()> {
         if self.proxy_instances.is_empty() {
-            return Err(ProxyError::InvalidProxyConfig(
-                "No proxy instances configured".to_string(),
-            )
-            .into());
+            eprintln!("ℹ️  No proxy instances configured - server running but no forwarding rules active");
+            // 不返回错误，允许服务器在没有代理实例的情况下运行
         }
 
         // Start all proxy instances concurrently

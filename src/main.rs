@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use gsc_fq::cli::Args;
-use gsc_fq::config::ConfigLoader;
+use gsc_fq::config::{ConfigFile, ConfigLoader};
 use gsc_fq::error::{AppError, ConfigError, Result};
 use gsc_fq::proxy::ProxyServerBuilder;
 use gsc_fq::utils::system::check_system_requirements;
@@ -26,10 +26,26 @@ async fn main() -> Result<()> {
     check_system_requirements()?;
 
     // Load configuration
-    let mut config = if let Some(config_path) = &args.config {
-        ConfigLoader::load_from_file(config_path)?
+    let config = if let Some(config_path) = &args.config {
+        // 加载指定配置文件，如果不存在会自动使用空配置
+        match ConfigLoader::load_from_file(config_path) {
+            Ok(config) => config,
+            Err(AppError::Config(ConfigError::ConfigFileNotFound(path))) => {
+                eprintln!("⚠️  Configuration file '{}' not found, starting with empty configuration", path);
+                ConfigFile {
+                    server: None,
+                    proxies: Vec::new(),
+                }
+            }
+            Err(e) => return Err(e),
+        }
     } else {
-        ConfigLoader::get_default_config()
+        // 没有指定配置文件，使用空配置
+        eprintln!("ℹ️  No configuration file specified, starting with empty configuration (use -c for config file)");
+        ConfigFile {
+            server: None,
+            proxies: Vec::new(),
+        }
     };
 
     // Parse bind IP - use command line arg first, then config, then default

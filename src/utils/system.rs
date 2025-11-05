@@ -1,5 +1,4 @@
-use crate::error::{Result, SystemError};
-use std::fs;
+use crate::error::Result;
 
 /// Check system requirements for optimal performance
 pub fn check_system_requirements() -> Result<()> {
@@ -113,13 +112,6 @@ fn check_splice_availability() -> Result<()> {
     );
 
     Ok(())
-}
-
-/// Read value from sysfs file
-fn read_sysfs_value(path: &str) -> Result<String> {
-    fs::read_to_string(path)
-        .map_err(|e| SystemError::SystemCallFailed(format!("Failed to read {}: {}", path, e)))
-        .map_err(Into::into)
 }
 
 /// Check memory limits and availability
@@ -241,13 +233,6 @@ mod tests {
     fn test_optimize_system_settings() {
         let result = optimize_system_settings();
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_is_running_in_container() {
-        // This test will return false in most development environments
-        let in_container = is_running_in_container();
-        // We don't assert a specific value since it depends on the test environment
     }
 
     #[cfg(target_os = "linux")]
