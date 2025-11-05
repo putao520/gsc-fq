@@ -1,0 +1,8 @@
+/target
+default.toml
+nul
+*.err
+*.log
+*.tmp
+CLAUDE.md
+/SPEC

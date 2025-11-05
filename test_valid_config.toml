@@ -1,0 +1,13 @@
+[[proxies]]
+local_port = 8080
+remote_host = "example.com"
+remote_port = 80
+
+[[proxies]]
+local_port = 5432
+remote_host = "db.example.test"
+remote_port = 5432
+source_ip = "192.0.2.10"
+
+[server]
+bind_ip = "127.0.0.1"
