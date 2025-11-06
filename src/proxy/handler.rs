@@ -168,7 +168,7 @@ impl ConnectionHandler {
         // Use Tokio's built-in copy_bidirectional for efficient zero-copy data forwarding
         // Add timeout to prevent infinite blocking
         match tokio::time::timeout(
-            Duration::from_secs(300), // 5 minutes timeout for data forwarding
+            Duration::from_secs(60), // 1 minute timeout for data forwarding
             copy_bidirectional(&mut client, &mut remote)
         ).await {
             Ok(result) => {
@@ -178,7 +178,7 @@ impl ConnectionHandler {
             }
             Err(_) => {
                 // Timeout occurred - one side likely stopped responding
-                error_println!("Data forwarding timeout after 5 minutes, closing connection");
+                error_println!("Data forwarding timeout after 1 minute, closing connection");
                 return Err(ProxyError::ForwardingFailed(
                     "Data forwarding timeout".to_string()
                 ).into());
