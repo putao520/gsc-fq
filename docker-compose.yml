@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  gsc-fq:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gsc-fq-proxy
+    restart: unless-stopped
+    ports:
+      - "33100:33100"
+      - "33200:33200"
+      - "33300:33300"
+    volumes:
+      - ./config:/app/config:ro  # 只读挂载配置目录
+    environment:
+      - RUST_LOG=info
+    networks:
+      - proxy-network
+    healthcheck:
+      test: ["CMD", "pgrep", "gsc-fq"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # 生产环境使用 distroless 版本
+  gsc-fq-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile.distrolezz
+    container_name: gsc-fq-proxy-prod
+    restart: unless-stopped
+    ports:
+      - "33100:33100"
+      - "33200:33200"
+      - "33300:33300"
+    volumes:
+      - ./config:/app/config:ro
+    environment:
+      - RUST_LOG=info
+    networks:
+      - proxy-network
+    profiles:
+      - production  # 使用 profile 区分环境
+
+networks:
+  proxy-network:
+    driver: bridge

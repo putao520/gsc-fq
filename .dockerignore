@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 测试和覆盖率
+coverage/
+*.profraw
+
+# 文档
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# 日志
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+
+# 配置文件（敏感信息）
+.env
+.env.local
+config/local.*
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 其他
+.nohup.*

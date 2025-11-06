@@ -1,0 +1,40 @@
+# 更小的运行时镜像 - 基于 distroless（生产环境推荐）
+
+# 构建阶段 - 复用之前的构建
+FROM rust:1.90-alpine as builder
+
+WORKDIR /app
+
+RUN apk add --no-cache \
+    musl-dev \
+    pkgconfig \
+    openssl-dev \
+    openssl3 \
+    openssl3-dev
+
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
+
+COPY src ./src
+RUN cargo build --release
+
+# 运行阶段 - 使用 distroless 最小镜像
+FROM gcr.io/distroless/cc-debian12
+
+# 复制二进制文件
+COPY --from=builder /app/target/release/gsc-fq /usr/local/bin/gsc-fq
+
+# 复制 SSL 证书（如果需要）
+COPY --from=builder /etc/ssl/certs /etc/ssl/certs
+
+# 暴露端口
+EXPOSE 33100 33200 33300
+
+# 用户（distroless 需要指定用户ID）
+USER 65534:65534
+
+# 默认命令
+ENTRYPOINT ["/usr/local/bin/gsc-fq"]
