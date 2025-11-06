@@ -7,13 +7,11 @@
 //! - 自动TCP参数优化
 //! - 智能内存和连接池管理
 
-pub mod cli;
 pub mod config;
 pub mod error;
 pub mod proxy;
 pub mod utils;
 
 // 重新导出主要类型和函数
-pub use cli::Args;
 pub use config::{ConfigFile, ConfigLoader, ProxySection, ServerSection};
 pub use error::{AppError, ConfigError, NetworkError, ProxyError, Result};

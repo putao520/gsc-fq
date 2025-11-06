@@ -9,12 +9,12 @@ GSC-FQ is a high-performance TCP data stream proxy forwarding CLI tool built on 
 ## 🚀 Features
 
 - **High Performance**: Built on Tokio async runtime, supports thousands of concurrent connections
-- **Flexible Configuration**: Supports TOML configuration files with multiple forwarding rules
-- **Smart Debugging**: Zero-overhead debugging system in production, enable detailed logs on demand
-- **Source IP Spoofing**: Optional source IP address configuration
+- **Simple Configuration**: Only requires a `default.toml` file in the current directory
+- **Smart Debugging**: Zero-overhead debugging system, controlled via configuration file
+- **Source IP Control**: Optional source IP address configuration for each proxy rule
 - **Zero-Copy Forwarding**: Efficient data transfer using `tokio::io::copy_bidirectional`
 - **Graceful Shutdown**: Signal handling and resource cleanup
-- **Simple to Use**: Clean CLI interface with only two startup parameters
+- **Zero Dependency**: No command-line arguments, completely configuration-driven
 
 ## 📦 Installation
 
@@ -32,83 +32,59 @@ cd gsc-fq
 cargo build --release
 ```
 
-### Basic Usage
+## 🎯 Quick Start
 
-```bash
-# Start with default forwarding rules
-gsc-fq 127.0.0.1
+### 1. Create Configuration File
 
-# Start with configuration file
-gsc-fq --config config.toml 127.0.0.1
-
-# Enable debug mode
-gsc-fq --debug 127.0.0.1
-```
-
-## ⚙️ Configuration
-
-### Configuration File
-
-Create a TOML configuration file:
+Create a `default.toml` file in the same directory as the executable:
 
 ```toml
-[[proxy]]
-local_port = 8080
-remote_host = "127.0.0.1"
-remote_port = 12345
-source_ip = "192.168.1.100"  # Optional: Set source IP address
+[server]
+bind_ip = "127.0.0.1"
+debug = false
 
-[[proxy]]
-local_port = 8081
+[[proxies]]
+local_port = 8080
 remote_host = "example.com"
 remote_port = 80
+
+[[proxies]]
+local_port = 5432
+remote_host = "db.example.com"
+remote_port = 5432
+source_ip = "192.168.1.100"  # Optional: Specify source IP
 ```
 
-### Default Forwarding Rules
-
-When no configuration file is specified, GSC-FQ includes built-in forwarding rules for common use cases. You can create your own configuration file to customize the forwarding behavior:
-
-```toml
-[[proxy]]
-local_port = 8080
-remote_host = "your-server.com"
-remote_port = 80
-
-[[proxy]]
-local_port = 8443
-remote_host = "your-server.com"
-remote_port = 443
-```
-
-## 📋 Command Line Options
-
-```
-Usage: gsc-fq [OPTIONS] <BIND_IP>
-
-Arguments:
-  <BIND_IP>  Bind IP address for listening
-
-Options:
-  -c, --config <FILE>  TOML configuration file path
-  -d, --debug          Enable debug mode for detailed logging output
-  -h, --help           Display help information
-  -V, --version        Display version information
-```
-
-## 🎯 Smart Debugging
-
-GSC-FQ provides an intelligent debugging system:
-
-- **Production Mode** (without `--debug`): Silent operation with zero performance overhead
-- **Debug Mode** (with `--debug`): Shows detailed connection handling information
+### 2. Run the Proxy
 
 ```bash
-# Production mode - High performance silent operation
-gsc-fq 127.0.0.1
-
-# Debug mode - Detailed connection logs
-gsc-fq --debug 127.0.0.1
+# Simply run the program - it will automatically read default.toml
+./gsc-fq
 ```
+
+## ⚙️ Configuration Format
+
+The `default.toml` file supports the following sections:
+
+### Server Section
+
+```toml
+[server]
+bind_ip = "127.0.0.1"  # IP address to bind to
+debug = false          # Enable debug logging
+```
+
+### Proxy Rules
+
+```toml
+[[proxies]]
+local_port = 8080           # Local port to listen on
+remote_host = "target.com"  # Remote host to forward to
+remote_port = 80            # Remote port to forward to
+source_ip = "10.0.0.1"      # Optional: Source IP for outbound connections
+```
+
+You can define multiple proxy rules by adding more `[[proxies]]` sections.
 
 ## ⚡ Performance
 
@@ -228,6 +204,21 @@ Issues and Pull Requests are welcome! Please ensure:
 3. Update relevant documentation
 
 ## 📝 Changelog
+
+### v0.3.0 (2025-11-06)
+- ✨ **Major Simplification**: Removed all command-line arguments
+- ✨ Configuration file must be named `default.toml` in current directory
+- ✨ Debug mode now controlled via `server.debug` in configuration
+- ✨ Removed built-in default configurations
+- ✨ Simplified codebase by removing unnecessary fallback logic
+- ✦ Enhanced source IP support with proper validation
+- ⚡ Improved error messages and configuration validation
+
+### v0.2.0 (2025-11-05)
+- ✅ Fixed Linux compilation issues
+- ✅ Added Docker support with Dockerfile and docker-compose
+- ✅ Updated default configuration with multiple proxy examples
+- ✅ Enhanced configuration loading to support empty config startup
 
 ### v0.1.0 (2025-11-05)
 - 🎉 Initial release

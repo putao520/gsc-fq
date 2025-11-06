@@ -4,9 +4,6 @@ use thiserror::Error;
 /// Application error type
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error("CLI argument error: {0}")]
-    Cli(#[from] clap::Error),
-
     #[error("Configuration error: {0}")]
     Config(#[from] ConfigError),
 
@@ -197,7 +194,7 @@ impl AppError {
     /// Get error severity
     pub fn severity(&self) -> ErrorSeverity {
         match self {
-            AppError::Config(_) | AppError::Cli(_) => ErrorSeverity::Fatal,
+            AppError::Config(_) => ErrorSeverity::Fatal,
             AppError::System(SystemError::InsufficientFileDescriptors) => ErrorSeverity::Fatal,
             AppError::Network(NetworkError::ConnectionClosed) => ErrorSeverity::Warning,
             AppError::Network(NetworkError::ConnectionTimeout) => ErrorSeverity::Error,

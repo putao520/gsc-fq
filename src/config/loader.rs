@@ -5,26 +5,6 @@ use std::path::Path;
 
 use crate::error::{AppError, ConfigError, Result};
 
-/// Built-in default configuration to avoid external file dependencies.
-const BUILTIN_DEFAULT_CONFIG: &str = r#"[server]
-bind_ip = "127.0.0.1"
-
-[[proxies]]
-local_port = 33100
-remote_host = "198.51.100.10"
-remote_port = 8080
-
-[[proxies]]
-local_port = 33200
-remote_host = "198.51.100.20"
-remote_port = 8080
-
-[[proxies]]
-local_port = 33300
-remote_host = "198.51.100.30"
-remote_port = 8080
-"#;
-
 /// TOML configuration file structure
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
@@ -36,12 +16,14 @@ pub struct ConfigFile {
 #[derive(Debug, Deserialize)]
 pub struct ServerSection {
     pub bind_ip: Option<String>,
+    pub debug: Option<bool>,
 }
 
 impl Default for ServerSection {
     fn default() -> Self {
         Self {
             bind_ip: Some("127.0.0.1".to_string()),
+            debug: Some(false),
         }
     }
 }
@@ -63,11 +45,9 @@ impl ConfigFile {
         let mut warnings = Vec::new();
         let mut errors = Vec::new();
 
-        // 允许空的proxies列表 - 支持无配置文件启动
+        // 配置文件必须有代理规则
         if self.proxies.is_empty() {
-            warnings.push(
-                "No proxy configurations found - server will start but no forwarding rules are active".to_string(),
-            );
+            errors.push("No proxy configurations found in default.toml".to_string());
         }
 
         if let Some(server) = self.server.as_mut() {
@@ -165,49 +145,30 @@ pub struct ConfigLoader;
 impl ConfigLoader {
     /// Load configuration from file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<ConfigFile> {
-        match Self::load_with_fallback(path) {
-            Ok(config) => Ok(config),
-            Err(ConfigError::ConfigFileNotFound(_)) => {
-                // 如果文件不存在，返回空配置而不是错误
-                Ok(ConfigFile {
-                    server: None,
-                    proxies: Vec::new(),
-                })
+        let path_ref = path.as_ref();
+        let content = fs::read_to_string(path_ref).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::Config(ConfigError::ConfigFileNotFound(
+                    path_ref.to_string_lossy().to_string(),
+                ))
+            } else {
+                AppError::Config(ConfigError::ReadFailed(format!(
+                    "Failed to read config file '{}': {}",
+                    path_ref.display(),
+                    e
+                )))
             }
-            Err(e) => Err(AppError::from(e)),
-        }
+        })?;
+
+        let (config, warnings) = Self::load_from_str_with_warnings(&content)?;
+        Self::emit_warnings(&warnings);
+        Ok(config)
     }
 
     /// Load configuration from string
     pub fn load_from_str(content: &str) -> Result<ConfigFile> {
         let (config, warnings) =
             Self::load_from_str_with_warnings(content).map_err(AppError::from)?;
-        Self::emit_warnings(&warnings);
-        Ok(config)
-    }
-
-    /// Load configuration from file with detailed fallback handling
-    pub fn load_with_fallback<P: AsRef<Path>>(
-        path: P,
-    ) -> std::result::Result<ConfigFile, ConfigError> {
-        let path_ref = path.as_ref();
-        let content = match fs::read_to_string(path_ref) {
-            Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ConfigError::ConfigFileNotFound(
-                    path_ref.to_string_lossy().to_string(),
-                ));
-            }
-            Err(e) => {
-                return Err(ConfigError::ReadFailed(format!(
-                    "Failed to read config file '{}': {}",
-                    path_ref.display(),
-                    e
-                )));
-            }
-        };
-
-        let (config, warnings) = Self::load_from_str_with_warnings(&content)?;
         Self::emit_warnings(&warnings);
         Ok(config)
     }
@@ -232,22 +193,6 @@ impl ConfigLoader {
         }
     }
 
-    /// Get default configuration
-    /// 获取默认配置
-    pub fn get_default_config() -> ConfigFile {
-        // 直接返回内置的默认配置；若加载失败则认为程序构建有误
-        Self::load_default_config_file()
-            .expect("Built-in default configuration should always be valid")
-    }
-
-    /// Load default configuration
-    /// 加载默认配置
-    fn load_default_config_file() -> std::result::Result<ConfigFile, ConfigError> {
-        let (config, warnings) = Self::load_from_str_with_warnings(BUILTIN_DEFAULT_CONFIG)?;
-        Self::emit_warnings(&warnings);
-        Ok(config)
-    }
-
     /// Parse IP address
     pub fn parse_ip_address(ip_str: &str) -> Result<IpAddr> {
         let trimmed = ip_str.trim();
@@ -265,35 +210,6 @@ impl ConfigLoader {
     /// Check if configuration file exists
     pub fn config_file_exists<P: AsRef<Path>>(path: P) -> bool {
         path.as_ref().exists()
-    }
-
-    /// Create example configuration file
-    pub fn create_example_config<P: AsRef<Path>>(path: P) -> Result<()> {
-        let example_config = r#"[server]
-bind_ip = "0.0.0.0"
-
-[[proxies]]
-local_port = 8080
-remote_host = "203.0.113.10"
-remote_port = 80
-source_ip = "198.51.100.10"
-
-[[proxies]]
-local_port = 5432
-remote_host = "db.example.test"
-remote_port = 5432
-
-[[proxies]]
-local_port = 9090
-remote_host = "api.example.test"
-remote_port = 443
-"#;
-
-        fs::write(path, example_config).map_err(|e| {
-            ConfigError::ReadFailed(format!("Failed to write example config: {}", e))
-        })?;
-
-        Ok(())
     }
 
     fn sanitize_special_values(content: &str) -> (String, Vec<String>) {
@@ -388,27 +304,6 @@ mod tests {
     use std::fs;
     use std::net::{Ipv4Addr, Ipv6Addr};
     use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_default_config() {
-        let config = ConfigLoader::get_default_config();
-        let server = config
-            .server
-            .as_ref()
-            .expect("Default config should contain a server section");
-        assert_eq!(server.bind_ip.as_deref(), Some("127.0.0.1"));
-        assert_eq!(config.proxies.len(), 3);
-
-        let first = &config.proxies[0];
-        assert_eq!(first.local_port, 33100);
-        assert_eq!(first.remote_host, "198.51.100.10");
-        assert_eq!(first.remote_port, 8080);
-
-        let last = &config.proxies[2];
-        assert_eq!(last.local_port, 33300);
-        assert_eq!(last.remote_host, "198.51.100.30");
-        assert_eq!(last.remote_port, 8080);
-    }
 
     #[test]
     fn test_validate_detects_invalid_source_ip() {
@@ -518,9 +413,9 @@ remote_host = "example.com"
 
     #[test]
     fn test_config_file_not_found() {
-        let err = ConfigLoader::load_with_fallback("does_not_exist.toml").unwrap_err();
+        let err = ConfigLoader::load_from_file("does_not_exist.toml").unwrap_err();
         match err {
-            ConfigError::ConfigFileNotFound(path) => {
+            AppError::Config(ConfigError::ConfigFileNotFound(path)) => {
                 assert!(path.contains("does_not_exist.toml"));
             }
             other => panic!("Expected ConfigFileNotFound, got {:?}", other),
@@ -539,7 +434,7 @@ source_ip = null
 "#;
         fs::write(file.path(), content).expect("write config");
 
-        let config = ConfigLoader::load_with_fallback(file.path()).expect("load config");
+        let config = ConfigLoader::load_from_file(file.path()).expect("load config");
         assert!(config.proxies[0].source_ip.is_none());
     }
 

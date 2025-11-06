@@ -1,6 +1,6 @@
 [package]
 name = "gsc-fq"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Claude Code AI <noreply@anthropic.com>"]
 description = "高性能数据流代理转发CLI工具，支持TOML配置和智能调试"
@@ -15,9 +15,6 @@ readme = "README.md"
 [dependencies]
 # 异步运行时
 tokio = { version = "1.40", features = ["full"] }
-
-# CLI参数解析
-clap = { version = "4.5", features = ["derive"] }
 
 # 配置文件解析
 toml = "0.8"

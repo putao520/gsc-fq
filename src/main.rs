@@ -3,9 +3,7 @@
 #![cfg_attr(not(debug_assertions), allow(unused_imports))]
 #![cfg_attr(not(debug_assertions), allow(unused_variables))]
 
-use clap::Parser;
-use gsc_fq::cli::Args;
-use gsc_fq::config::{ConfigFile, ConfigLoader};
+use gsc_fq::config::ConfigLoader;
 use gsc_fq::error::{AppError, ConfigError, Result};
 use gsc_fq::proxy::ProxyServerBuilder;
 use gsc_fq::utils::system::check_system_requirements;
@@ -13,42 +11,31 @@ use std::net::IpAddr;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    // Load configuration from default.toml in current directory
+    let config_path = "default.toml";
+    let config = match ConfigLoader::load_from_file(config_path) {
+        Ok(config) => config,
+        Err(AppError::Config(ConfigError::ConfigFileNotFound(_))) => {
+            eprintln!("❌ Configuration file 'default.toml' not found in current directory!");
+            eprintln!("Please create a default.toml file with your proxy configuration.");
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e),
+    };
 
-    // Validate CLI arguments
-    args.validate()?;
-
-    // Initialize debug system
-    gsc_fq::utils::debug::init_debug(args.debug);
+    // Initialize debug system from config
+    let debug_enabled = if let Some(server_section) = &config.server {
+        server_section.debug.unwrap_or(false)
+    } else {
+        false
+    };
+    gsc_fq::utils::debug::init_debug(debug_enabled);
 
     // Check system requirements
     #[cfg(debug_assertions)]
     check_system_requirements()?;
 
-    // Load configuration
-    let config = if let Some(config_path) = &args.config {
-        // 加载指定配置文件，如果不存在会自动使用空配置
-        match ConfigLoader::load_from_file(config_path) {
-            Ok(config) => config,
-            Err(AppError::Config(ConfigError::ConfigFileNotFound(path))) => {
-                eprintln!("⚠️  Configuration file '{}' not found, starting with empty configuration", path);
-                ConfigFile {
-                    server: None,
-                    proxies: Vec::new(),
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    } else {
-        // 没有指定配置文件，使用空配置
-        eprintln!("ℹ️  No configuration file specified, starting with empty configuration (use -c for config file)");
-        ConfigFile {
-            server: None,
-            proxies: Vec::new(),
-        }
-    };
-
-    // Parse bind IP - use command line arg first, then config, then default
+    // Parse bind IP from config
     let bind_ip: IpAddr = if let Some(server_section) = &config.server {
         if let Some(bind_ip_str) = &server_section.bind_ip {
             bind_ip_str.parse().map_err(|e| {
