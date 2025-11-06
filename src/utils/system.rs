@@ -1,4 +1,14 @@
-use crate::error::Result;
+use crate::error::{Result, SystemError};
+use std::fs;
+use std::path::Path;
+
+/// Read a value from sysfs file
+fn read_sysfs_value(path: &str) -> Result<String> {
+    Ok(fs::read_to_string(path)
+        .map_err(|e| SystemError::SystemCallFailed(format!("Failed to read {}: {}", path, e)))?
+        .trim()
+        .to_string())
+}
 
 /// Check system requirements for optimal performance
 pub fn check_system_requirements() -> Result<()> {
@@ -22,8 +32,7 @@ fn check_file_descriptor_limits() -> Result<()> {
     // Try to read the current file descriptor limit
     #[cfg(unix)]
     {
-        use std::ffi::CStr;
-        use std::os::raw::c_int;
+        use nix::libc;
 
         unsafe {
             // Try to get the current soft limit
@@ -80,6 +89,7 @@ fn check_linux_network_settings() -> Result<()> {
 fn check_splice_availability() -> Result<()> {
     use nix::fcntl::{splice, SpliceFFlags};
     use nix::unistd::pipe;
+    use std::os::fd::FromRawFd;
 
     // Create a pipe to test splice functionality
     let (pipe_read, pipe_write) = pipe()
@@ -91,21 +101,21 @@ fn check_splice_availability() -> Result<()> {
     use std::os::unix::io::AsRawFd;
 
     // Write test data to pipe
-    use std::os::unix::io::FromRawFd;
-    let mut pipe_write_file = unsafe { std::fs::File::from_raw_fd(pipe_write.as_raw_fd()) };
-    if let Err(_) = pipe_write_file.write_all(test_data) {
-        return Ok(());
+    {
+        let mut pipe_write_file = unsafe { std::fs::File::from_raw_fd(pipe_write.as_raw_fd()) };
+        let _ = pipe_write_file.write_all(test_data);
+        std::mem::forget(pipe_write_file); // Avoid closing the fd
     }
 
     // Test splice from pipe to pipe
-    let (pipe2_read, pipe2_write) = pipe().map_err(|e| {
+    let (_pipe2_read, pipe2_write) = pipe().map_err(|e| {
         SystemError::SystemCallFailed(format!("Failed to create second test pipe: {}", e))
     })?;
 
     let _ = splice(
-        pipe_read.as_raw_fd(),
+        &pipe_read,
         None,
-        pipe2_write.as_raw_fd(),
+        &pipe2_write,
         None,
         4,
         SpliceFFlags::empty(),
