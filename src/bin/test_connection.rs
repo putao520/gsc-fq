@@ -5,12 +5,12 @@
 //! gsc-fq = { path = ".." }
 //! ```
 
+use gsc_fq::config::loader::ProxySection;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
-use gsc_fq::config::loader::ProxySection;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -76,7 +76,8 @@ async fn test_proxy_scenarios() -> Result<(), Box<dyn std::error::Error>> {
         "127.0.0.1:8080".parse()?,
         "127.0.0.1:9000".parse()?,
         Duration::from_secs(5),
-    ).await?;
+    )
+    .await?;
 
     // Test scenario 2: Slow remote server
     println!("   Scenario 2: Slow remote server simulation");
@@ -146,8 +147,13 @@ async fn test_proxy_with_config(
         stream.read_exact(&mut response).await?;
         let total_time = start.elapsed();
 
-        Ok::<(Duration, Duration, Vec<u8>), Box<dyn std::error::Error>>((connect_time, total_time, response))
-    }).await;
+        Ok::<(Duration, Duration, Vec<u8>), Box<dyn std::error::Error>>((
+            connect_time,
+            total_time,
+            response,
+        ))
+    })
+    .await;
 
     match test_result {
         Ok(Ok((connect_time, total_time, response))) => {
@@ -191,7 +197,8 @@ async fn test_proxy_with_slow_remote() -> Result<(), Box<dyn std::error::Error>>
         "127.0.0.1:8081".parse()?,
         remote_addr,
         Duration::from_secs(10),
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -221,7 +228,8 @@ async fn test_proxy_with_dropping_remote() -> Result<(), Box<dyn std::error::Err
         stream.read_exact(&mut response).await?;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    }).await;
+    })
+    .await;
 
     match test_result {
         Ok(Ok(_)) => println!("     ⚠️  Unexpected success with dropping remote"),
@@ -265,7 +273,8 @@ async fn test_large_data_transfer() -> Result<(), Box<dyn std::error::Error>> {
         println!("     1MB transfer completed in: {:?}", transfer_time);
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    }).await;
+    })
+    .await;
 
     match test_result {
         Ok(Ok(_)) => println!("     ✅ Large data transfer successful"),
@@ -291,7 +300,8 @@ async fn test_concurrent_connections() -> Result<(), Box<dyn std::error::Error>>
                 stream.read_exact(&mut response).await?;
 
                 Ok::<(), Box<dyn std::error::Error>>(())
-            }).await;
+            })
+            .await;
 
             match test_result {
                 Ok(Ok(_)) => println!("     ✅ Concurrent connection {} successful", i),
@@ -319,7 +329,8 @@ async fn test_write_only_connection() -> Result<(), Box<dyn std::error::Error>> 
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         Ok::<(), Box<dyn std::error::Error>>(())
-    }).await;
+    })
+    .await;
 
     match test_result {
         Ok(Ok(_)) => println!("     ✅ Write-only connection completed without timeout"),

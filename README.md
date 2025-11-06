@@ -24,6 +24,46 @@ GSC-FQ is a high-performance TCP data stream proxy forwarding CLI tool built on 
 cargo install gsc-fq
 ```
 
+### Install as System Service
+
+After installing via cargo, you can set up gsc-fq as a systemd service:
+
+```bash
+# Create service file
+sudo tee /etc/systemd/system/gsc-fq.service > /dev/null <<EOF
+[Unit]
+Description=GSC-FQ TCP Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=gsc-fq
+WorkingDirectory=/etc/gsc-fq
+ExecStart=$(which gsc-fq)
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create user and config directory
+sudo useradd -r -s /bin/false gsc-fq
+sudo mkdir -p /etc/gsc-fq
+sudo chown gsc-fq:gsc-fq /etc/gsc-fq
+
+# Create your configuration in /etc/gsc-fq/default.toml
+sudo nano /etc/gsc-fq/default.toml
+
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable gsc-fq
+sudo systemctl start gsc-fq
+
+# Check status
+sudo systemctl status gsc-fq
+```
+
 ### Build from Source
 
 ```bash
@@ -86,15 +126,6 @@ source_ip = "10.0.0.1"      # Optional: Source IP for outbound connections
 
 You can define multiple proxy rules by adding more `[[proxies]]` sections.
 
-## ⚡ Performance
-
-- **High-Performance Data Forwarding** - Zero-copy optimization using `tokio::io::copy` and custom buffered implementations
-- **Bidirectional Streaming** - Independent async tasks for each direction prevent blocking
-- **Adaptive Strategy Selection** - Automatically chooses the best forwarding method based on conditions
-- **64KB Buffer Optimization** - Reduces system calls for better throughput
-- **Unlimited Concurrency** - Based on `tokio::spawn` async task scheduling
-- **Memory Safe** - Rust memory safety guarantees, avoiding buffer overflows
-- **Production Optimized** - LTO and code generation optimizations enabled in Release mode
 
 ## 🛠️ Troubleshooting
 
@@ -132,22 +163,6 @@ Error: Invalid TOML format: TOML parse error at line 12, column 17: expected str
 Tip: Check for syntax errors like 'null' values (should be omitted), missing quotes, or invalid data types
 ```
 
-### Invalid Field Values
-
-When configuration values fail validation, the loader reports the exact field path to help you fix the issue:
-
-```
-Error: Invalid configuration value at config: proxies[0].source_ip 'not-an-ip' is not a valid IP address
-```
-
-### Tolerating Optional Fields
-
-Certain recoverable issues are logged as warnings so the application can still start safely:
-
-```
-⚠️  Configuration Warning: proxies[0].source_ip contains invalid 'null' value; the field will be ignored
-⚠️  Configuration Warning: server.bind_ip is empty, falling back to default 127.0.0.1
-```
 
 ## 🔒 Security Considerations
 
@@ -173,12 +188,22 @@ cargo build --release
 # Run all tests
 cargo test
 
-# Run integration tests
-cargo test --test integration
+# Run specific test modules
+cargo test --test proxy_functionality_test --test blackhole_functionality_test
+
+# Run library tests only
+cargo test --lib
 
 # Benchmark tests
 cargo bench
 ```
+
+### Testing
+
+- Run tests: `cargo test`
+- Proxy functionality tests
+- Blackhole mode tests
+- Unit tests for all modules
 
 ### Lint
 
@@ -206,36 +231,21 @@ Issues and Pull Requests are welcome! Please ensure:
 2. Add appropriate test cases
 3. Update relevant documentation
 
-## 📝 Changelog
 
-### v0.3.7 (2025-11-06)
-- 🚀 **High-Performance Implementation**: Added zero-copy optimization using Tokio ecosystem libraries
-- ✨ New `high_perf.rs` module with three performance strategies
-- ✨ `optimized_bidirectional` - uses `tokio::io::copy` for maximum throughput
-- ✨ `buffered_bidirectional` - 64KB buffers for reduced system calls
-- ✨ `adaptive_copy` - automatically selects best forwarding method
-- ⚡ Improved bidirectional streaming with independent async tasks
-- ✅ SSH protocol banner forwarding now works correctly
 
-### v0.3.0 (2025-11-06)
-- ✨ **Major Simplification**: Removed all command-line arguments
-- ✨ Configuration file must be named `default.toml` in current directory
-- ✨ Debug mode now controlled via `server.debug` in configuration
-- ✨ Removed built-in default configurations
-- ✨ Simplified codebase by removing unnecessary fallback logic
-- ✦ Enhanced source IP support with proper validation
-- ⚡ Improved error messages and configuration validation
+## 🎯 Use Cases
 
-### v0.2.0 (2025-11-05)
-- ✅ Fixed Linux compilation issues
-- ✅ Added Docker support with Dockerfile and docker-compose
-- ✅ Updated default configuration with multiple proxy examples
-- ✅ Enhanced configuration loading to support empty config startup
+- Network testing
+- Service migration
+- Load balancing
+- Protocol analysis
+- Security testing
 
-### v0.1.0 (2025-11-05)
-- 🎉 Initial release
-- ✅ Basic TCP proxy forwarding functionality
-- ✅ TOML configuration file support
-- ✅ Smart debugging system
-- ✅ Graceful shutdown mechanism
-- ✅ Cross-platform support
+## 🏗️ Architecture
+
+```
+Client → GSC-FQ → Target Server
+```
+
+Built on Tokio async runtime for high-performance concurrent connections.
+

@@ -1,4 +1,0 @@
-[[proxies]]
-local_port = 8080
-remote_host = "example.com"
-remote_port = 80

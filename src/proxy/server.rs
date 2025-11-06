@@ -1,6 +1,6 @@
 use crate::config::loader::{ConfigLoader, ProxySection};
 use crate::error::{NetworkError, Result};
-use crate::proxy::handler::ConnectionHandler;
+use crate::proxy::StealthConnectionHandler;
 use crate::{debug_println, error_println};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
@@ -54,7 +54,9 @@ impl ProxyServer {
     /// Start all proxy instances
     pub async fn start(&mut self) -> Result<()> {
         if self.proxy_instances.is_empty() {
-            eprintln!("ℹ️  No proxy instances configured - server running but no forwarding rules active");
+            eprintln!(
+                "ℹ️  No proxy instances configured - server running but no forwarding rules active"
+            );
             // 不返回错误，允许服务器在没有代理实例的情况下运行
         }
 
@@ -112,7 +114,7 @@ impl ProxyServer {
 
     /// Display startup information
     async fn display_startup_info(&self) {
-        println!("🚀 GSC-FQ Proxy Server v0.3.1");
+        println!("🚀 GSC-FQ Proxy Server v{}", env!("CARGO_PKG_VERSION"));
         println!("================================");
         println!("📡 Server listening on: {}", self.bind_ip);
         println!();
@@ -137,7 +139,8 @@ impl ProxyServer {
                 }
             };
 
-            println!("  {}. {}:{} -> {}:{}{}",
+            println!(
+                "  {}. {}:{} -> {}:{}{}",
                 i + 1,
                 self.bind_ip,
                 instance.bind_addr.port(),
@@ -163,43 +166,49 @@ impl ProxyServer {
         let start = std::time::Instant::now();
 
         // Use tokio::time::timeout for the connection attempt
-        let connect_result = tokio::time::timeout(
-            Duration::from_secs(3),
-            async {
-                // If source IP is specified, we need to use TcpSocket to bind
-                if let Some(source_ip) = instance.source_ip {
-                    let socket = match instance.remote_addr {
-                        SocketAddr::V4(_) => TcpSocket::new_v4().map_err(|e| {
-                            NetworkError::ConnectionFailed(format!("Failed to create IPv4 socket: {}", e))
-                        })?,
-                        SocketAddr::V6(_) => TcpSocket::new_v6().map_err(|e| {
-                            NetworkError::ConnectionFailed(format!("Failed to create IPv6 socket: {}", e))
-                        })?,
-                    };
-
-                    // Bind to source IP
-                    let local_addr = SocketAddr::new(source_ip, 0);
-                    socket.bind(local_addr).map_err(|e| {
+        let connect_result = tokio::time::timeout(Duration::from_secs(3), async {
+            // If source IP is specified, we need to use TcpSocket to bind
+            if let Some(source_ip) = instance.source_ip {
+                let socket = match instance.remote_addr {
+                    SocketAddr::V4(_) => TcpSocket::new_v4().map_err(|e| {
                         NetworkError::ConnectionFailed(format!(
-                            "Failed to bind to source IP {}: {}",
-                            source_ip, e
+                            "Failed to create IPv4 socket: {}",
+                            e
                         ))
-                    })?;
+                    })?,
+                    SocketAddr::V6(_) => TcpSocket::new_v6().map_err(|e| {
+                        NetworkError::ConnectionFailed(format!(
+                            "Failed to create IPv6 socket: {}",
+                            e
+                        ))
+                    })?,
+                };
 
-                    // Connect using the bound socket
-                    let _stream = socket.connect(instance.remote_addr).await.map_err(|e| {
+                // Bind to source IP
+                let local_addr = SocketAddr::new(source_ip, 0);
+                socket.bind(local_addr).map_err(|e| {
+                    NetworkError::ConnectionFailed(format!(
+                        "Failed to bind to source IP {}: {}",
+                        source_ip, e
+                    ))
+                })?;
+
+                // Connect using the bound socket
+                let _stream = socket.connect(instance.remote_addr).await.map_err(|e| {
+                    NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
+                })?;
+            } else {
+                // No source IP specified, use TcpStream::connect
+                let _stream = tokio::net::TcpStream::connect(instance.remote_addr)
+                    .await
+                    .map_err(|e| {
                         NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
                     })?;
-                } else {
-                    // No source IP specified, use TcpStream::connect
-                    let _stream = tokio::net::TcpStream::connect(instance.remote_addr).await.map_err(|e| {
-                        NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
-                    })?;
-                }
-
-                Ok::<(), NetworkError>(())
             }
-        ).await;
+
+            Ok::<(), NetworkError>(())
+        })
+        .await;
 
         match connect_result {
             Ok(Ok(())) => Ok(start.elapsed()),
@@ -227,7 +236,7 @@ pub struct ProxyInstance {
     bind_addr: SocketAddr,
     remote_addr: SocketAddr,
     source_ip: Option<IpAddr>,
-    connection_handler: Arc<ConnectionHandler>,
+    connection_handler: Arc<StealthConnectionHandler>,
     running: bool,
 }
 
@@ -254,8 +263,9 @@ impl ProxyInstance {
     ) -> Result<Self> {
         let bind_addr = SocketAddr::new(bind_ip, local_port);
 
-        // Create connection handler
-        let connection_handler = Arc::new(ConnectionHandler::new(remote_addr, source_ip, None));
+        // Create stealth connection handler with blackhole capabilities
+        let connection_handler =
+            Arc::new(StealthConnectionHandler::new(remote_addr, source_ip, None));
 
         Ok(Self {
             bind_addr,
@@ -376,8 +386,10 @@ impl ProxyInstance {
     }
 
     /// Get connection statistics
-    pub fn get_connection_stats(&self) -> crate::proxy::handler::ConnectionStats {
-        self.connection_handler.get_connection_stats()
+    pub async fn get_connection_stats(
+        &self,
+    ) -> crate::proxy::stealth_connection_handler::StealthConnectionStats {
+        self.connection_handler.get_connection_stats().await
     }
 
     /// Get remote address

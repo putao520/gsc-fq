@@ -7,10 +7,32 @@ use gsc_fq::config::ConfigLoader;
 use gsc_fq::error::{AppError, ConfigError, Result};
 use gsc_fq::proxy::ProxyServerBuilder;
 use gsc_fq::utils::system::check_system_requirements;
+use std::env;
 use std::net::IpAddr;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+
+    // Handle help flag and reject unknown arguments
+    if args.len() > 1 {
+        if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+            eprintln!("error: unexpected argument '--help' found");
+            eprintln!("This program does not support command line arguments.");
+            eprintln!("Please configure the proxy using the default.toml file.");
+            std::process::exit(1);
+        } else {
+            eprintln!("error: unexpected arguments provided:");
+            for arg in &args[1..] {
+                eprintln!("  {}", arg);
+            }
+            eprintln!("This program does not support command line arguments.");
+            eprintln!("Please configure the proxy using the default.toml file.");
+            std::process::exit(1);
+        }
+    }
+
     // Load configuration from default.toml in current directory
     let config_path = "default.toml";
     let config = match ConfigLoader::load_from_file(config_path) {

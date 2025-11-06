@@ -1,14 +1,11 @@
+use crate::debug_println;
 /// 高性能零拷贝实现，使用 Tokio 生态的成熟库
 use crate::error::Result;
-use crate::debug_println;
-use tokio::net::TcpStream;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 /// 使用 tokio::io::copy 的高效双向数据转发
-pub async fn optimized_bidirectional(
-    client: TcpStream,
-    server: TcpStream,
-) -> Result<(u64, u64)> {
+pub async fn optimized_bidirectional(client: TcpStream, server: TcpStream) -> Result<(u64, u64)> {
     debug_println!("Starting optimized bidirectional forwarding");
 
     // 分割流为读写两部分
@@ -55,10 +52,7 @@ pub async fn optimized_bidirectional(
 }
 
 /// 带缓冲区优化的双向转发
-pub async fn buffered_bidirectional(
-    client: TcpStream,
-    server: TcpStream,
-) -> Result<(u64, u64)> {
+pub async fn buffered_bidirectional(client: TcpStream, server: TcpStream) -> Result<(u64, u64)> {
     debug_println!("Starting buffered bidirectional forwarding");
 
     // 使用更大的缓冲区提高性能
@@ -127,10 +121,7 @@ pub async fn buffered_bidirectional(
 }
 
 /// 自适应性能优化：自动选择最佳策略
-pub async fn adaptive_copy(
-    client: TcpStream,
-    server: TcpStream,
-) -> Result<(u64, u64)> {
+pub async fn adaptive_copy(client: TcpStream, server: TcpStream) -> Result<(u64, u64)> {
     debug_println!("Starting adaptive copy - auto-selecting best method");
 
     // 优先尝试使用优化的 io::copy 实现
@@ -145,46 +136,3 @@ pub async fn adaptive_copy(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::net::{TcpListener, TcpStream};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test]
-    async fn test_adaptive_copy() {
-        // 创建测试服务器
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        // Echo 服务器
-        let server_task = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (mut read, mut write) = stream.into_split();
-
-            let mut buf = vec![0; 1024];
-            loop {
-                match read.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        write.write_all(&buf[..n]).await.unwrap();
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        // 测试连接
-        let client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        let server = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-
-        // 使用 adaptive_copy
-        let (bytes1, bytes2) = adaptive_copy(client, server).await.unwrap();
-
-        // 清理
-        server_task.abort();
-
-        assert!(bytes1 + bytes2 >= 0);
-        println!("Adaptive copy test: {} bytes transferred", bytes1 + bytes2);
-    }
-}

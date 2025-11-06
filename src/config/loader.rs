@@ -208,20 +208,23 @@ impl ConfigLoader {
             Ok(SocketAddr::new(ip, port))
         } else {
             // If not an IP address, use std::net::ToSocketAddrs to resolve hostname
-            use std::net::ToSocketAddrs;
             use crate::error::NetworkError;
+            use std::net::ToSocketAddrs;
 
             let host_port = format!("{}:{}", host, port);
-            let mut addrs = (host_port.as_str(), 0).to_socket_addrs()
-                .map_err(|e| NetworkError::AddressResolutionFailed(format!(
-                    "Failed to resolve hostname '{}': {}", host, e
-                )))?;
+            let mut addrs = (host_port.as_str(), 0).to_socket_addrs().map_err(|e| {
+                NetworkError::AddressResolutionFailed(format!(
+                    "Failed to resolve hostname '{}': {}",
+                    host, e
+                ))
+            })?;
 
             // Return the first address
             let addr = addrs.next().ok_or_else(|| {
-                AppError::Network(NetworkError::AddressResolutionFailed(
-                    format!("No addresses found for hostname '{}'", host)
-                ))
+                AppError::Network(NetworkError::AddressResolutionFailed(format!(
+                    "No addresses found for hostname '{}'",
+                    host
+                )))
             })?;
             Ok(SocketAddr::new(addr.ip(), port))
         }

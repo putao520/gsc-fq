@@ -1,0 +1,221 @@
+use crate::debug_println;
+use crate::error::types::ProxyError;
+use std::time::Duration;
+use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
+/// Stealth handler with blackhole mode for hiding protocol signatures
+/// Detects server rejections and enters blackhole mode to confuse active probing
+use tokio::net::TcpStream;
+
+/// Generate a simple pseudo-random number using system time
+fn pseudo_random_range(min: u64, max: u64) -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+
+    // Simple linear congruential generator
+    let a: u64 = 1664525;
+    let c: u64 = 1013904223;
+    let m: u64 = 2_u64.pow(32);
+    let result = (a.wrapping_mul(seed).wrapping_add(c)) % m;
+
+    // Map to range
+    min + (result % (max - min + 1))
+}
+
+/// Stealth handler that detects rejections and enters blackhole mode
+pub struct StealthHandler;
+
+impl StealthHandler {
+    /// Handle connection with stealth capabilities
+    pub async fn handle_stealth(
+        client: TcpStream,
+        remote_addr: std::net::SocketAddr,
+    ) -> Result<(), ProxyError> {
+        // First, test the remote connection
+        match Self::test_remote_connection(remote_addr).await {
+            Ok(()) => {
+                // Remote is responsive, use normal forwarding
+                debug_println!("Remote server responsive, using normal forwarding");
+
+                // Re-establish connection for forwarding
+                let remote = TcpStream::connect(remote_addr).await.map_err(|e| {
+                    ProxyError::ForwardingFailed(format!("Connection failed: {}", e))
+                })?;
+                Self::normal_forwarding(client, remote).await
+            }
+            Err(e) => {
+                // Check if it's a rejection
+                if Self::is_rejection(&e) {
+                    debug_println!("🕳️  Server rejection detected, entering blackhole mode");
+                    Self::enter_blackhole_mode(client).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Test if remote server rejects connections
+    async fn test_remote_connection(remote_addr: std::net::SocketAddr) -> Result<(), ProxyError> {
+        let mut test_stream =
+            tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(remote_addr))
+                .await
+                .map_err(|_| ProxyError::ForwardingFailed("Connection timeout".to_string()))?
+                .map_err(|e| ProxyError::ForwardingFailed(format!("Connection failed: {}", e)))?;
+
+        // Try to send a test packet
+        let test_data = b"TEST";
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), test_stream.write_all(test_data))
+                .await;
+
+        match result {
+            Ok(Ok(_)) => {
+                // Server accepted the data
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                // Server rejected during write
+                if Self::is_io_rejection(&e) {
+                    Err(ProxyError::ForwardingFailed(
+                        "Server rejected data".to_string(),
+                    ))
+                } else {
+                    Err(ProxyError::ForwardingFailed(format!("Write error: {}", e)))
+                }
+            }
+            Err(_) => {
+                // Timeout - assume rejection
+                Err(ProxyError::ForwardingFailed("Server timeout".to_string()))
+            }
+        }
+    }
+
+    /// Check if error indicates server rejection
+    fn is_rejection(err: &ProxyError) -> bool {
+        match err {
+            ProxyError::ForwardingFailed(msg)
+                if msg.contains("refused")
+                    || msg.contains("reset")
+                    || msg.contains("rejected")
+                    || msg.contains("timeout") =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if IO error indicates rejection
+    fn is_io_rejection(err: &std::io::Error) -> bool {
+        matches!(
+            err.kind(),
+            std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+        )
+    }
+
+    /// Enter blackhole mode - keep client connected but discard all data
+    async fn enter_blackhole_mode(mut client: TcpStream) -> Result<(), ProxyError> {
+        use tokio::time;
+
+        // Random delay between 2-30 minutes
+        let delay_seconds = pseudo_random_range(120, 1800);
+        let delay = Duration::from_secs(delay_seconds);
+
+        let client_addr = client
+            .peer_addr()
+            .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
+        debug_println!(
+            "🕳️  Blackhole activated for {} - duration: {}s",
+            client_addr,
+            delay_seconds
+        );
+
+        let mut buffer = [0u8; 4096];
+        let start_time = time::Instant::now();
+
+        while start_time.elapsed() < delay {
+            let remaining = delay - start_time.elapsed();
+
+            tokio::select! {
+                result = client.read(&mut buffer) => {
+                    match result {
+                        Ok(0) => {
+                            debug_println!("Blackhole: client disconnected");
+                            break;
+                        }
+                        Ok(n) => {
+                            debug_println!("Blackhole: absorbed {} bytes", n);
+                            // Data is automatically discarded
+                        }
+                        Err(e) if Self::is_io_rejection(&e) => {
+                            debug_println!("Blackhole: client reset connection");
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                _ = time::sleep(remaining) => {
+                    debug_println!("Blackhole: timeout reached");
+                    break;
+                }
+            }
+        }
+
+        debug_println!("🕳️  Blackhole mode ended");
+        Ok(())
+    }
+
+    /// Normal bidirectional forwarding
+    async fn normal_forwarding(client: TcpStream, remote: TcpStream) -> Result<(), ProxyError> {
+        let (mut client_read, mut client_write) = client.into_split();
+        let (mut remote_read, mut remote_write) = remote.into_split();
+
+        let client_to_remote = tokio::spawn(async move {
+            match copy(&mut client_read, &mut remote_write).await {
+                Ok(bytes) => {
+                    debug_println!("Client->Remote: {} bytes", bytes);
+                }
+                Err(e) => {
+                    debug_println!("Client->Remote failed: {}", e);
+                }
+            }
+        });
+
+        let remote_to_client = tokio::spawn(async move {
+            match copy(&mut remote_read, &mut client_write).await {
+                Ok(bytes) => {
+                    debug_println!("Remote->Client: {} bytes", bytes);
+                }
+                Err(e) => {
+                    debug_println!("Remote->Client failed: {}", e);
+                }
+            }
+        });
+
+        // Wait for both directions
+        let _ = tokio::join!(client_to_remote, remote_to_client);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rejection_detection() {
+        let reset_err = ProxyError::ForwardingFailed("connection refused".to_string());
+        let timeout_err = ProxyError::ForwardingFailed("Server timeout".to_string());
+        let other_err = ProxyError::ForwardingFailed("unknown error".to_string());
+
+        assert!(StealthHandler::is_rejection(&reset_err));
+        assert!(StealthHandler::is_rejection(&timeout_err));
+        assert!(!StealthHandler::is_rejection(&other_err));
+    }
+}

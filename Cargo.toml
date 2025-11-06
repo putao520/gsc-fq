@@ -1,9 +1,9 @@
 [package]
 name = "gsc-fq"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2021"
 authors = ["Claude Code AI <noreply@anthropic.com>"]
-description = "高性能数据流代理转发CLI工具，支持TOML配置和智能调试"
+description = "High-performance TCP data stream proxy forwarding CLI tool with TOML configuration and intelligent debugging"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/putao520/gsc-fq"
 homepage = "https://github.com/putao520/gsc-fq"
@@ -41,6 +41,9 @@ bytes = "1.5"
 
 # 系统信息
 num_cpus = "1.16"
+
+# UUID生成
+uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []

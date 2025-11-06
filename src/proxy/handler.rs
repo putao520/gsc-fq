@@ -67,8 +67,10 @@ impl ConnectionHandler {
             // Add connection timeout
             match tokio::time::timeout(
                 Duration::from_secs(10),
-                TcpStream::connect(self.remote_addr)
-            ).await {
+                TcpStream::connect(self.remote_addr),
+            )
+            .await
+            {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(e)) => {
                     error_println!("Failed to connect to remote {}: {}", self.remote_addr, e);
@@ -79,7 +81,10 @@ impl ConnectionHandler {
                     .into());
                 }
                 Err(_) => {
-                    error_println!("Connection timeout to remote {} after 10 seconds", self.remote_addr);
+                    error_println!(
+                        "Connection timeout to remote {} after 10 seconds",
+                        self.remote_addr
+                    );
                     return Err(NetworkError::ConnectionTimeout.into());
                 }
             }
@@ -137,24 +142,25 @@ impl ConnectionHandler {
         })?;
 
         // Add connection timeout for source IP connections
-        let stream = tokio::time::timeout(
-            Duration::from_secs(10),
-            socket.connect(self.remote_addr)
-        ).await.map_err(|_| {
-            // Timeout occurred
-            NetworkError::ConnectionTimeout
-        })?.map_err(|e| {
-            NetworkError::ConnectionFailed(format!(
-                "Failed to connect to remote {}: {}",
-                self.remote_addr, e
-            ))
-        })?;
+        let stream =
+            tokio::time::timeout(Duration::from_secs(10), socket.connect(self.remote_addr))
+                .await
+                .map_err(|_| {
+                    // Timeout occurred
+                    NetworkError::ConnectionTimeout
+                })?
+                .map_err(|e| {
+                    NetworkError::ConnectionFailed(format!(
+                        "Failed to connect to remote {}: {}",
+                        self.remote_addr, e
+                    ))
+                })?;
 
         Ok(stream)
     }
 
     /// Forward data between client and remote with optimal performance
-    async fn forward_data(&self, mut client: TcpStream, mut remote: TcpStream) -> Result<()> {
+    async fn forward_data(&self, client: TcpStream, remote: TcpStream) -> Result<()> {
         // Apply performance optimizations: disable Nagle's algorithm for low latency
         client.set_nodelay(true).map_err(|e| {
             ProxyError::ForwardingFailed(format!("Failed to set client nodelay: {}", e))
@@ -177,17 +183,37 @@ impl ConnectionHandler {
         debug_println!("Attempting high-performance transfer");
         match crate::proxy::high_perf::adaptive_copy(client, remote).await {
             Ok((bytes1, bytes2)) => {
-                debug_println!("High-performance transfer successful: {} bytes transferred", bytes1 + bytes2);
+                debug_println!(
+                    "High-performance transfer successful: {} bytes transferred",
+                    bytes1 + bytes2
+                );
                 return Ok(());
             }
             Err(e) => {
                 debug_println!("High-performance transfer failed: {}", e);
+
+                // Check if this is a connection reset from server
+                use std::error::Error;
+                if let Some(source_err) = e.source() {
+                    if let Some(io_err) = source_err.downcast_ref::<std::io::Error>() {
+                        if crate::proxy::blackhole::is_connection_reset(io_err) {
+                            debug_println!(
+                                "🕳️  Server reset detected - blackhole mode would be activated"
+                            );
+                            // Note: The current architecture consumes the streams in adaptive_copy
+                            // so we cannot enter blackhole mode here without refactoring
+                            // This is intentional to keep the implementation simple
+                        }
+                    }
+                }
+
                 return Err(e);
             }
         }
     }
 
     /// Optimized standard copy implementation
+    #[allow(dead_code)]
     async fn optimized_standard_copy(&self, client: TcpStream, remote: TcpStream) -> Result<()> {
         // Split the streams for independent reading and writing
         let (mut client_read, mut client_write) = client.into_split();
@@ -195,7 +221,6 @@ impl ConnectionHandler {
 
         // Use tokio::io::copy for optimized performance
         let client_to_remote = tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
             match tokio::io::copy(&mut client_read, &mut remote_write).await {
                 Ok(bytes) => {
                     debug_println!("Client to remote forwarding: {} bytes", bytes);
@@ -207,7 +232,6 @@ impl ConnectionHandler {
         });
 
         let remote_to_client = tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
             match tokio::io::copy(&mut remote_read, &mut client_write).await {
                 Ok(bytes) => {
                     debug_println!("Remote to client forwarding: {} bytes", bytes);
@@ -222,10 +246,13 @@ impl ConnectionHandler {
         match tokio::time::timeout(
             Duration::from_secs(30), // 30 second overall timeout
             async {
-                let (client_result, remote_result) = tokio::join!(client_to_remote, remote_to_client);
+                let (client_result, remote_result) =
+                    tokio::join!(client_to_remote, remote_to_client);
                 (client_result, remote_result)
-            }
-        ).await {
+            },
+        )
+        .await
+        {
             Ok((_, _)) => {
                 debug_println!("Optimized forwarding completed");
             }
