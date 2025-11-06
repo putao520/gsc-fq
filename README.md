@@ -12,7 +12,7 @@ GSC-FQ is a high-performance TCP data stream proxy forwarding CLI tool built on 
 - **Simple Configuration**: Only requires a `default.toml` file in the current directory
 - **Smart Debugging**: Zero-overhead debugging system, controlled via configuration file
 - **Source IP Control**: Optional source IP address configuration for each proxy rule
-- **Zero-Copy Forwarding**: Efficient data transfer using `tokio::io::copy_bidirectional`
+- **High-Performance Forwarding**: Zero-copy optimization using Tokio ecosystem libraries
 - **Graceful Shutdown**: Signal handling and resource cleanup
 - **Zero Dependency**: No command-line arguments, completely configuration-driven
 
@@ -88,7 +88,10 @@ You can define multiple proxy rules by adding more `[[proxies]]` sections.
 
 ## ⚡ Performance
 
-- **Zero-Copy Data Forwarding** - Efficient data transfer using `tokio::io::copy_bidirectional`
+- **High-Performance Data Forwarding** - Zero-copy optimization using `tokio::io::copy` and custom buffered implementations
+- **Bidirectional Streaming** - Independent async tasks for each direction prevent blocking
+- **Adaptive Strategy Selection** - Automatically chooses the best forwarding method based on conditions
+- **64KB Buffer Optimization** - Reduces system calls for better throughput
 - **Unlimited Concurrency** - Based on `tokio::spawn` async task scheduling
 - **Memory Safe** - Rust memory safety guarantees, avoiding buffer overflows
 - **Production Optimized** - LTO and code generation optimizations enabled in Release mode
@@ -204,6 +207,15 @@ Issues and Pull Requests are welcome! Please ensure:
 3. Update relevant documentation
 
 ## 📝 Changelog
+
+### v0.3.7 (2025-11-06)
+- 🚀 **High-Performance Implementation**: Added zero-copy optimization using Tokio ecosystem libraries
+- ✨ New `high_perf.rs` module with three performance strategies
+- ✨ `optimized_bidirectional` - uses `tokio::io::copy` for maximum throughput
+- ✨ `buffered_bidirectional` - 64KB buffers for reduced system calls
+- ✨ `adaptive_copy` - automatically selects best forwarding method
+- ⚡ Improved bidirectional streaming with independent async tasks
+- ✅ SSH protocol banner forwarding now works correctly
 
 ### v0.3.0 (2025-11-06)
 - ✨ **Major Simplification**: Removed all command-line arguments
