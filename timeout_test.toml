@@ -1,8 +1,0 @@
-[server]
-bind_ip = "127.0.0.1"
-debug = true
-
-[[proxies]]
-local_port = 9080
-remote_host = "127.0.0.1"
-remote_port = 9001
