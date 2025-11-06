@@ -153,9 +153,10 @@ impl ConnectionHandler {
         Ok(stream)
     }
 
-    /// Forward data between client and remote using Tokio's built-in bidirectional copying
+    /// Forward data between client and remote with improved handling
     async fn forward_data(&self, mut client: TcpStream, mut remote: TcpStream) -> Result<()> {
-        use tokio::io::copy_bidirectional;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::sync::mpsc;
 
         // Apply CODEX's performance optimizations: disable Nagle's algorithm for low latency
         client.set_nodelay(true).map_err(|e| {
@@ -165,25 +166,124 @@ impl ConnectionHandler {
             ProxyError::ForwardingFailed(format!("Failed to set remote nodelay: {}", e))
         })?;
 
-        // Use Tokio's built-in copy_bidirectional for efficient zero-copy data forwarding
-        // Add timeout to prevent infinite blocking
-        match tokio::time::timeout(
-            Duration::from_secs(60), // 1 minute timeout for data forwarding
-            copy_bidirectional(&mut client, &mut remote)
-        ).await {
-            Ok(result) => {
-                result.map_err(|e| {
-                    ProxyError::ForwardingFailed(format!("Bidirectional copy failed: {}", e))
-                })?;
+        // Create channels for signaling when data is transferred
+        let (tx, mut rx) = mpsc::channel::<()>(1);
+
+        // Split the streams for bidirectional communication
+        let (mut client_read, mut client_write) = client.into_split();
+        let (mut remote_read, mut remote_write) = remote.into_split();
+
+        // Clone sender for both tasks
+        let tx1 = tx.clone();
+        let tx2 = tx.clone();
+
+        // Task 1: Forward data from client to remote
+        let client_to_remote = tokio::spawn(async move {
+            let mut buf = [0; 8192];
+            let mut data_transferred = false;
+
+            loop {
+                match tokio::time::timeout(
+                    Duration::from_secs(30), // Read timeout
+                    client_read.read(&mut buf)
+                ).await {
+                    Ok(Ok(0)) => break, // Connection closed
+                    Ok(Ok(n)) => {
+                        if let Err(e) = remote_write.write_all(&buf[..n]).await {
+                            debug_println!("Failed to write to remote: {}", e);
+                            break;
+                        }
+                        if let Err(e) = remote_write.flush().await {
+                            debug_println!("Failed to flush remote: {}", e);
+                            break;
+                        }
+                        data_transferred = true;
+                    }
+                    Ok(Err(e)) => {
+                        debug_println!("Error reading from client: {}", e);
+                        break;
+                    }
+                    Err(_) => {
+                        // Read timeout - continue if we've transferred data before
+                        if !data_transferred {
+                            debug_println!("No data from client for 30 seconds, continuing...");
+                        }
+                        continue;
+                    }
+                }
             }
-            Err(_) => {
-                // Timeout occurred - one side likely stopped responding
-                error_println!("Data forwarding timeout after 1 minute, closing connection");
-                return Err(ProxyError::ForwardingFailed(
-                    "Data forwarding timeout".to_string()
-                ).into());
+
+            // Signal that this side has finished
+            let _ = tx1.send(()).await;
+        });
+
+        // Task 2: Forward data from remote to client
+        let remote_to_client = tokio::spawn(async move {
+            let mut buf = [0; 8192];
+            let mut data_transferred = false;
+
+            loop {
+                match tokio::time::timeout(
+                    Duration::from_secs(30), // Read timeout
+                    remote_read.read(&mut buf)
+                ).await {
+                    Ok(Ok(0)) => break, // Connection closed
+                    Ok(Ok(n)) => {
+                        if let Err(e) = client_write.write_all(&buf[..n]).await {
+                            debug_println!("Failed to write to client: {}", e);
+                            break;
+                        }
+                        if let Err(e) = client_write.flush().await {
+                            debug_println!("Failed to flush client: {}", e);
+                            break;
+                        }
+                        data_transferred = true;
+                    }
+                    Ok(Err(e)) => {
+                        debug_println!("Error reading from remote: {}", e);
+                        break;
+                    }
+                    Err(_) => {
+                        // Read timeout - continue if we've transferred data before
+                        if !data_transferred {
+                            debug_println!("No data from remote for 30 seconds, continuing...");
+                        }
+                        continue;
+                    }
+                }
             }
-        }
+
+            // Signal that this side has finished
+            let _ = tx2.send(()).await;
+        });
+
+        // Task 3: Monitor the connection with a longer timeout
+        let monitor = tokio::spawn(async move {
+            // Use a longer overall timeout but check for activity
+            let mut last_activity = tokio::time::Instant::now();
+            let max_idle_time = Duration::from_secs(60); // 1 minute max idle
+
+            loop {
+                tokio::select! {
+                    // Check if either side signaled completion
+                    _ = rx.recv() => {
+                        debug_println!("One side of the connection closed");
+                        break;
+                    }
+                    // Check for maximum idle time
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                        if tokio::time::Instant::now().duration_since(last_activity) > max_idle_time {
+                            debug_println!("Connection idle for too long, closing");
+                            break;
+                        }
+                    }
+                }
+                last_activity = tokio::time::Instant::now();
+            }
+        });
+
+        // Wait for all tasks to complete
+        let _ = tokio::try_join!(client_to_remote, remote_to_client, monitor);
 
         Ok(())
     }
