@@ -166,18 +166,18 @@ impl ProxyServer {
         let connect_result = tokio::time::timeout(
             Duration::from_secs(3),
             async {
-                // Create socket based on IP family
-                let socket = match instance.remote_addr {
-                    SocketAddr::V4(_) => TcpSocket::new_v4().map_err(|e| {
-                        NetworkError::ConnectionFailed(format!("Failed to create IPv4 socket: {}", e))
-                    })?,
-                    SocketAddr::V6(_) => TcpSocket::new_v6().map_err(|e| {
-                        NetworkError::ConnectionFailed(format!("Failed to create IPv6 socket: {}", e))
-                    })?,
-                };
-
-                // Bind to source IP if specified
+                // If source IP is specified, we need to use TcpSocket to bind
                 if let Some(source_ip) = instance.source_ip {
+                    let socket = match instance.remote_addr {
+                        SocketAddr::V4(_) => TcpSocket::new_v4().map_err(|e| {
+                            NetworkError::ConnectionFailed(format!("Failed to create IPv4 socket: {}", e))
+                        })?,
+                        SocketAddr::V6(_) => TcpSocket::new_v6().map_err(|e| {
+                            NetworkError::ConnectionFailed(format!("Failed to create IPv6 socket: {}", e))
+                        })?,
+                    };
+
+                    // Bind to source IP
                     let local_addr = SocketAddr::new(source_ip, 0);
                     socket.bind(local_addr).map_err(|e| {
                         NetworkError::ConnectionFailed(format!(
@@ -185,12 +185,17 @@ impl ProxyServer {
                             source_ip, e
                         ))
                     })?;
-                }
 
-                // Try to connect
-                let _stream = socket.connect(instance.remote_addr).await.map_err(|e| {
-                    NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
-                })?;
+                    // Connect using the bound socket
+                    let _stream = socket.connect(instance.remote_addr).await.map_err(|e| {
+                        NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
+                    })?;
+                } else {
+                    // No source IP specified, use TcpStream::connect
+                    let _stream = tokio::net::TcpStream::connect(instance.remote_addr).await.map_err(|e| {
+                        NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
+                    })?;
+                }
 
                 Ok::<(), NetworkError>(())
             }

@@ -101,16 +101,14 @@ remote_port = {}
 
     // Step 2: Start GSC-FQ proxy
     println!("\n==> Starting GSC-FQ proxy...");
+    // Copy the test config to default.toml
+    std::fs::copy("test_proxy_config.toml", "default.toml")?;
+
     let mut proxy_server = Command::new("cargo")
         .args(&[
             "run",
             "--bin",
             "gsc-fq",
-            "--",
-            "--config",
-            "test_proxy_config.toml",
-            "--debug",
-            "127.0.0.1", // Add BIND_IP parameter
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -144,6 +142,7 @@ remote_port = {}
     let _ = proxy_server.kill();
     let _ = proxy_server.wait(); // Wait to avoid leftover proxy process.
     let _ = fs::remove_file("test_proxy_config.toml");
+    let _ = fs::remove_file("default.toml");
 
     if shutdown_tx.send(()).is_err() {
         println!("[WARN] Echo server shutdown signal receiver dropped early");
@@ -189,6 +188,9 @@ remote_port = 8080
     fs::write("test_config.toml", config_content)?;
 
     // Try to run GSC-FQ with this config (it should start without errors)
+    // Copy the test config to default.toml
+    std::fs::copy("test_config.toml", "default.toml")?;
+
     let mut proxy = Command::new("timeout")
         .args(&[
             "5",
@@ -196,10 +198,6 @@ remote_port = 8080
             "run",
             "--bin",
             "gsc-fq",
-            "--",
-            "--config",
-            "test_config.toml",
-            "--debug",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -215,6 +213,7 @@ remote_port = 8080
     let _ = proxy.kill();
     let _ = proxy.wait(); // Wait to ensure the process fully exits.
     let _ = fs::remove_file("test_config.toml");
+    let _ = fs::remove_file("default.toml");
 
     // If it exited immediately, there was an error
     if status.is_some() {
@@ -230,26 +229,28 @@ remote_port = 8080
 async fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n==> Testing CLI help output...");
 
+    // Since we removed command line arguments, help should fail or show an error
     let output = Command::new("cargo")
         .args(&["run", "--bin", "gsc-fq", "--", "--help"])
         .output()?;
 
-    let help_text = String::from_utf8_lossy(&output.stdout);
     let stderr_text = String::from_utf8_lossy(&output.stderr);
 
-    // Verify help contains expected information
+    // The program should exit with error when given unknown arguments
     assert!(
-        help_text.contains("gsc-fq") || stderr_text.contains("gsc-fq"),
-        "Help output should mention gsc-fq"
+        !output.status.success(),
+        "Program should fail with unknown arguments"
     );
 
     assert!(
-        help_text.contains("config") || stderr_text.contains("config"),
-        "Help should mention config option"
+        stderr_text.contains("required arguments were not provided") ||
+        stderr_text.contains("unexpected argument") ||
+        stderr_text.contains("error"),
+        "Should show error about unknown arguments"
     );
 
-    println!("[OK] Help command works correctly");
-    println!("[INFO] Help output length: {} chars", help_text.len());
+    println!("[OK] Command line validation works correctly");
+    println!("[INFO] Error output: {}", stderr_text.trim());
 
     Ok(())
 }

@@ -2,6 +2,7 @@ use crate::error::{NetworkError, ProxyError, Result};
 use crate::{debug_println, error_println};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpSocket, TcpStream};
 
 /// Connection handler for managing TCP proxy connections
@@ -63,9 +64,13 @@ impl ConnectionHandler {
             }
         } else {
             debug_println!("Connecting to {}", self.remote_addr);
-            match TcpStream::connect(self.remote_addr).await {
-                Ok(stream) => stream,
-                Err(e) => {
+            // Add connection timeout
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                TcpStream::connect(self.remote_addr)
+            ).await {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(e)) => {
                     error_println!("Failed to connect to remote {}: {}", self.remote_addr, e);
                     return Err(NetworkError::ConnectionFailed(format!(
                         "Failed to connect to remote {}: {}",
@@ -73,10 +78,17 @@ impl ConnectionHandler {
                     ))
                     .into());
                 }
+                Err(_) => {
+                    error_println!("Connection timeout to remote {} after 10 seconds", self.remote_addr);
+                    return Err(NetworkError::ConnectionTimeout.into());
+                }
             }
         };
 
         debug_println!("Successfully connected to remote {}", self.remote_addr);
+
+        // Note: TCP keep-alive is handled by the OS by default
+        // We rely on the timeout mechanisms to detect issues
 
         // Start bidirectional data forwarding
         debug_println!(
@@ -124,7 +136,14 @@ impl ConnectionHandler {
             ))
         })?;
 
-        let stream = socket.connect(self.remote_addr).await.map_err(|e| {
+        // Add connection timeout for source IP connections
+        let stream = tokio::time::timeout(
+            Duration::from_secs(10),
+            socket.connect(self.remote_addr)
+        ).await.map_err(|_| {
+            // Timeout occurred
+            NetworkError::ConnectionTimeout
+        })?.map_err(|e| {
             NetworkError::ConnectionFailed(format!(
                 "Failed to connect to remote {}: {}",
                 self.remote_addr, e
@@ -147,11 +166,24 @@ impl ConnectionHandler {
         })?;
 
         // Use Tokio's built-in copy_bidirectional for efficient zero-copy data forwarding
-        copy_bidirectional(&mut client, &mut remote)
-            .await
-            .map_err(|e| {
-                ProxyError::ForwardingFailed(format!("Bidirectional copy failed: {}", e))
-            })?;
+        // Add timeout to prevent infinite blocking
+        match tokio::time::timeout(
+            Duration::from_secs(300), // 5 minutes timeout for data forwarding
+            copy_bidirectional(&mut client, &mut remote)
+        ).await {
+            Ok(result) => {
+                result.map_err(|e| {
+                    ProxyError::ForwardingFailed(format!("Bidirectional copy failed: {}", e))
+                })?;
+            }
+            Err(_) => {
+                // Timeout occurred - one side likely stopped responding
+                error_println!("Data forwarding timeout after 5 minutes, closing connection");
+                return Err(ProxyError::ForwardingFailed(
+                    "Data forwarding timeout".to_string()
+                ).into());
+            }
+        }
 
         Ok(())
     }
