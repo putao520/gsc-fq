@@ -202,9 +202,29 @@ impl ConfigLoader {
     }
 
     /// Create socket address
-    pub fn create_socket_addr(ip: &str, port: u16) -> Result<SocketAddr> {
-        let ip = Self::parse_ip_address(ip)?;
-        Ok(SocketAddr::new(ip, port))
+    pub fn create_socket_addr(host: &str, port: u16) -> Result<SocketAddr> {
+        // Try to parse as IP address first
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            Ok(SocketAddr::new(ip, port))
+        } else {
+            // If not an IP address, use std::net::ToSocketAddrs to resolve hostname
+            use std::net::ToSocketAddrs;
+            use crate::error::NetworkError;
+
+            let host_port = format!("{}:{}", host, port);
+            let mut addrs = (host_port.as_str(), 0).to_socket_addrs()
+                .map_err(|e| NetworkError::AddressResolutionFailed(format!(
+                    "Failed to resolve hostname '{}': {}", host, e
+                )))?;
+
+            // Return the first address
+            let addr = addrs.next().ok_or_else(|| {
+                AppError::Network(NetworkError::AddressResolutionFailed(
+                    format!("No addresses found for hostname '{}'", host)
+                ))
+            })?;
+            Ok(SocketAddr::new(addr.ip(), port))
+        }
     }
 
     /// Check if configuration file exists

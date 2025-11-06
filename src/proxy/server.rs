@@ -5,7 +5,8 @@ use crate::{debug_println, error_println};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::net::TcpListener;
+use std::time::Duration;
+use tokio::net::{TcpListener, TcpSocket};
 use tokio::signal;
 use tokio::sync::broadcast;
 
@@ -57,6 +58,9 @@ impl ProxyServer {
             // 不返回错误，允许服务器在没有代理实例的情况下运行
         }
 
+        // Display startup information
+        self.display_startup_info().await;
+
         // Start all proxy instances concurrently
         let mut handles = Vec::new();
 
@@ -103,6 +107,99 @@ impl ProxyServer {
         #[cfg(windows)]
         {
             let _ = signal::ctrl_c().await;
+        }
+    }
+
+    /// Display startup information
+    async fn display_startup_info(&self) {
+        println!("🚀 GSC-FQ Proxy Server v0.3.1");
+        println!("================================");
+        println!("📡 Server listening on: {}", self.bind_ip);
+        println!();
+
+        if self.proxy_instances.is_empty() {
+            println!("⚠️  No proxy rules configured");
+            println!();
+            return;
+        }
+
+        println!("🔄 Checking remote server connectivity...");
+        println!();
+
+        // Test connectivity to remote servers
+        for (i, instance) in self.proxy_instances.iter().enumerate() {
+            let status = match self.test_remote_connectivity(instance).await {
+                Ok(duration) => {
+                    format!("✅ Connected ({}ms)", duration.as_millis())
+                }
+                Err(e) => {
+                    format!("❌ Failed: {}", e)
+                }
+            };
+
+            println!("  {}. {}:{} -> {}:{}{}",
+                i + 1,
+                self.bind_ip,
+                instance.bind_addr.port(),
+                instance.remote_addr.ip(),
+                instance.remote_addr.port(),
+                if let Some(source_ip) = instance.source_ip {
+                    format!(" (via {})", source_ip)
+                } else {
+                    String::new()
+                }
+            );
+            println!("     Status: {}", status);
+            println!();
+        }
+
+        println!("✅ Server started successfully");
+        println!("🛑 Press Ctrl+C to stop the server");
+        println!();
+    }
+
+    /// Test connectivity to a remote server
+    async fn test_remote_connectivity(&self, instance: &ProxyInstance) -> Result<Duration> {
+        let start = std::time::Instant::now();
+
+        // Use tokio::time::timeout for the connection attempt
+        let connect_result = tokio::time::timeout(
+            Duration::from_secs(3),
+            async {
+                // Create socket based on IP family
+                let socket = match instance.remote_addr {
+                    SocketAddr::V4(_) => TcpSocket::new_v4().map_err(|e| {
+                        NetworkError::ConnectionFailed(format!("Failed to create IPv4 socket: {}", e))
+                    })?,
+                    SocketAddr::V6(_) => TcpSocket::new_v6().map_err(|e| {
+                        NetworkError::ConnectionFailed(format!("Failed to create IPv6 socket: {}", e))
+                    })?,
+                };
+
+                // Bind to source IP if specified
+                if let Some(source_ip) = instance.source_ip {
+                    let local_addr = SocketAddr::new(source_ip, 0);
+                    socket.bind(local_addr).map_err(|e| {
+                        NetworkError::ConnectionFailed(format!(
+                            "Failed to bind to source IP {}: {}",
+                            source_ip, e
+                        ))
+                    })?;
+                }
+
+                // Try to connect
+                let _stream = socket.connect(instance.remote_addr).await.map_err(|e| {
+                    NetworkError::ConnectionFailed(format!("Connection failed: {}", e))
+                })?;
+
+                Ok::<(), NetworkError>(())
+            }
+        ).await;
+
+        match connect_result {
+            Ok(Ok(())) => Ok(start.elapsed()),
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => Err(NetworkError::ConnectionTimeout.into()),
         }
     }
 
