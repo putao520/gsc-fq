@@ -1,6 +1,6 @@
 [package]
 name = "gsc-fq"
-version = "0.3.4"
+version = "0.3.7"
 edition = "2021"
 authors = ["Claude Code AI <noreply@anthropic.com>"]
 description = "高性能数据流代理转发CLI工具，支持TOML配置和智能调试"
@@ -33,8 +33,11 @@ nix = { version = "0.29", features = ["socket", "net", "uio", "zerocopy"] }
 
 
 # 并发工具
-tokio-util = { version = "0.7", features = ["codec"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
 futures = "0.3"
+
+# 高性能字节缓冲区
+bytes = "1.5"
 
 # 系统信息
 num_cpus = "1.16"

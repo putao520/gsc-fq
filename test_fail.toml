@@ -1,0 +1,7 @@
+[server]
+bind_ip = "127.0.0.1"
+
+[[proxies]]
+local_port = 8080
+remote_host = "127.0.0.1"
+remote_port = 9999  # 不存在的端口
