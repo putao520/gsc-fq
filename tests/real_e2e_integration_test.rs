@@ -46,18 +46,19 @@ async fn wait_for_port_ready(port: u16, timeout_ms: u64) -> Result<(), Box<dyn s
 /// Generate test configuration file for GSC-FQ proxy
 fn generate_proxy_config(
     proxy_port: u16,
-    backend_port: u16,
+    _backend_port: u16, // Keep for compatibility but use real remote
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Use a real internet service for testing
     let config_content = format!(
         r#"[server]
 bind_ip = "127.0.0.1"
 
 [[proxies]]
 local_port = {}
-remote_host = "127.0.0.1"
-remote_port = {}
+remote_host = "httpbin.org"
+remote_port = 80
 "#,
-        proxy_port, backend_port
+        proxy_port
     );
 
     let config_path = PathBuf::from("e2e_test_proxy_config.toml");
@@ -206,8 +207,9 @@ async fn test_single_http_client(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect(proxy_addr).await?;
 
+    // Use httpbin.org which is the actual target
     let request = format!(
-        "GET /test{} HTTP/1.1\r\nHost: test.example.com\r\nConnection: close\r\n\r\n",
+        "GET /get?id={} HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
         client_id
     );
 
@@ -295,7 +297,7 @@ async fn test_real_e2e_proxy_functionality() -> Result<(), Box<dyn std::error::E
 async fn test_e2e_with_different_configs() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n==> Testing with different proxy configurations");
 
-    let backend_port = get_available_port();
+    let _backend_port = get_available_port();
     let proxy_port = get_available_port();
 
     // Test with source_ip configured
@@ -305,11 +307,11 @@ bind_ip = "127.0.0.1"
 
 [[proxies]]
 local_port = {}
-remote_host = "127.0.0.1"
-remote_port = {}
+remote_host = "httpbin.org"
+remote_port = 80
 source_ip = "127.0.0.1"
 "#,
-        proxy_port, backend_port
+        proxy_port
     );
 
     let config_path = PathBuf::from("e2e_test_proxy_config_with_source_ip.toml");
@@ -319,19 +321,15 @@ source_ip = "127.0.0.1"
         let _ = fs::remove_file("e2e_test_proxy_config_with_source_ip.toml");
     });
 
-    // Run a quick test with this configuration
-    let (backend_shutdown, _backend_handle) = start_backend_server(backend_port).await?;
-    sleep(Duration::from_millis(1000)).await;
-
+    // Run a quick test with this configuration (no backend server needed for remote target)
     let mut proxy = start_proxy_server(&config_path)?;
-    sleep(Duration::from_millis(3000)).await;
+    sleep(Duration::from_millis(5000)).await; // Give more time for remote connectivity check
 
-    wait_for_port_ready(proxy_port, 5000).await?;
+    wait_for_port_ready(proxy_port, 10000).await?;
 
     let success = run_client_test(proxy_port, 5).await?;
 
     // Cleanup
-    let _ = backend_shutdown.send(());
     let _ = proxy.kill();
     let _ = proxy.wait();
 
