@@ -39,17 +39,12 @@ impl ProxyServer {
             None
         };
 
-        // Connection pool configuration
-        let pool_enabled = proxy_config.pool_enabled.unwrap_or(false);
-        let pool_size = proxy_config.pool_size.unwrap_or(5).max(1).min(20);
-
+        // 连接池始终启用（使用内置安全策略）
         let instance = ProxyInstance::new(
             self.bind_ip,
             proxy_config.local_port,
             remote_addr,
             source_ip,
-            pool_enabled,
-            pool_size,
         )?;
 
         self.proxy_instances.push(instance);
@@ -268,18 +263,12 @@ impl ProxyInstance {
         local_port: u16,
         remote_addr: SocketAddr,
         source_ip: Option<IpAddr>,
-        pool_enabled: bool,
-        pool_size: usize,
     ) -> Result<Self> {
         let bind_addr = SocketAddr::new(bind_ip, local_port);
 
-        // Create connection pool if enabled
-        let connection_pool = if pool_enabled {
-            let pool = ConnectionPool::new(remote_addr, source_ip, pool_size);
-            Some(Arc::new(pool))
-        } else {
-            None
-        };
+        // 始终启用连接池（使用内置安全策略）
+        let pool = ConnectionPool::new(remote_addr, source_ip);
+        let connection_pool = Some(Arc::new(pool));
 
         // Create stealth connection handler with blackhole capabilities
         let connection_handler = Arc::new(StealthConnectionHandler::new(
@@ -542,7 +531,7 @@ mod tests {
         let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 8080);
         let source_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 50));
 
-        let instance = ProxyInstance::new(bind_ip, 8080, remote_addr, Some(source_ip), false, 5).unwrap();
+        let instance = ProxyInstance::new(bind_ip, 8080, remote_addr, Some(source_ip)).unwrap();
 
         assert_eq!(instance.get_bind_addr().ip(), bind_ip);
         assert_eq!(instance.get_bind_addr().port(), 8080);
@@ -560,8 +549,6 @@ mod tests {
             remote_host: "192.168.1.100".to_string(),
             remote_port: 8080,
             source_ip: None,
-            pool_enabled: None,
-            pool_size: None,
         };
 
         let server = ProxyServerBuilder::new()
@@ -597,7 +584,7 @@ mod tests {
             8080,
         );
 
-        let instance = ProxyInstance::new(bind_ip, 8080, remote_addr, None, false, 5).unwrap();
+        let instance = ProxyInstance::new(bind_ip, 8080, remote_addr, None).unwrap();
 
         assert_eq!(instance.get_bind_addr().ip(), bind_ip);
         assert_eq!(instance.get_remote_addr(), remote_addr);

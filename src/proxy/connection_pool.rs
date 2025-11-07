@@ -8,6 +8,12 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time;
 
+// 固定连接池策略（防止触发防火墙）
+const DEFAULT_POOL_SIZE: usize = 3; // 保守的池大小：3个连接
+const PREHEAT_DELAY_MS: u64 = 500; // 预热时每个连接间隔 500ms（避免连接风暴）
+const REFILL_DELAY_MS: u64 = 1000; // 补充连接前等待 1s（避免频繁连接）
+const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒（降低检查频率）
+
 /// 连接池统计信息
 #[derive(Debug, Default)]
 pub struct PoolStats {
@@ -48,16 +54,21 @@ impl ConnectionPool {
     /// # 参数
     /// - `remote_addr`: 后端服务器地址
     /// - `source_ip`: 可选的源 IP 地址
-    /// - `pool_size`: 连接池大小（建议 3-10）
-    pub fn new(remote_addr: SocketAddr, source_ip: Option<IpAddr>, pool_size: usize) -> Self {
+    ///
+    /// # 安全策略
+    /// 使用固定的保守策略，避免触发防火墙：
+    /// - 池大小：3个连接（避免突发连接）
+    /// - 预热间隔：500ms（避免被识别为端口扫描）
+    /// - 渐进式填充（避免连接风暴）
+    pub fn new(remote_addr: SocketAddr, source_ip: Option<IpAddr>) -> Self {
         Self {
             remote_addr,
             source_ip,
-            pool_size,
-            pool: Arc::new(Mutex::new(VecDeque::with_capacity(pool_size))),
+            pool_size: DEFAULT_POOL_SIZE,
+            pool: Arc::new(Mutex::new(VecDeque::with_capacity(DEFAULT_POOL_SIZE))),
             stats: Arc::new(PoolStats::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
-            semaphore: Arc::new(Semaphore::new(pool_size * 2)), // 允许2倍池大小的并发创建
+            semaphore: Arc::new(Semaphore::new(DEFAULT_POOL_SIZE * 2)),
         }
     }
 
@@ -74,35 +85,30 @@ impl ConnectionPool {
         Ok(())
     }
 
-    /// 预热连接池（初始化时建立连接）
+    /// 预热连接池（串行+延迟，避免触发防火墙）
+    ///
+    /// 安全策略：
+    /// 1. 串行创建连接（避免并发连接风暴）
+    /// 2. 每个连接之间延迟 500ms（模拟正常流量模式）
+    /// 3. 失败时不重试（避免反复触发防火墙）
     async fn preheat_pool(&self) -> Result<()> {
-        let mut tasks = Vec::new();
+        for i in 0..self.pool_size {
+            // 添加延迟（第一个连接除外）
+            if i > 0 {
+                time::sleep(Duration::from_millis(PREHEAT_DELAY_MS)).await;
+            }
 
-        for _ in 0..self.pool_size {
-            let remote_addr = self.remote_addr;
-            let source_ip = self.source_ip;
-            let stats = Arc::clone(&self.stats);
-            let pool = Arc::clone(&self.pool);
-
-            let task = tokio::spawn(async move {
-                match Self::create_connection(remote_addr, source_ip).await {
-                    Ok(stream) => {
-                        pool.lock().await.push_back(stream);
-                        stats.total_created.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to preheat connection: {}", e);
-                        stats.connection_failures.fetch_add(1, Ordering::Relaxed);
-                    }
+            match Self::create_connection(self.remote_addr, self.source_ip).await {
+                Ok(stream) => {
+                    self.pool.lock().await.push_back(stream);
+                    self.stats.total_created.fetch_add(1, Ordering::Relaxed);
                 }
-            });
-
-            tasks.push(task);
-        }
-
-        // 等待所有预热任务完成
-        for task in tasks {
-            let _ = task.await;
+                Err(e) => {
+                    eprintln!("⚠️  Failed to preheat connection {}/{}: {}", i + 1, self.pool_size, e);
+                    self.stats.connection_failures.fetch_add(1, Ordering::Relaxed);
+                    // 失败时不中断，继续尝试剩余连接
+                }
+            }
         }
 
         Ok(())
@@ -189,7 +195,7 @@ impl ConnectionPool {
         }
     }
 
-    /// 启动后台维护任务
+    /// 启动后台维护任务（低频检查，避免资源浪费）
     fn spawn_maintenance_task(&self) {
         let pool = Arc::clone(&self.pool);
         let remote_addr = self.remote_addr;
@@ -200,47 +206,13 @@ impl ConnectionPool {
         let semaphore = Arc::clone(&self.semaphore);
 
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(5)); // 每5秒检查一次
+            let mut interval = time::interval(Duration::from_secs(MAINTENANCE_INTERVAL_SECS));
 
             loop {
                 interval.tick().await;
 
                 if shutdown.load(Ordering::Relaxed) {
                     break;
-                }
-
-                // 检查当前池大小
-                let current_size = pool.lock().await.len();
-
-                // 如果低于目标大小，补充连接
-                if current_size < pool_size {
-                    let needed = pool_size - current_size;
-
-                    for _ in 0..needed {
-                        if shutdown.load(Ordering::Relaxed) {
-                            break;
-                        }
-
-                        // 获取信号量（限制并发）
-                        if let Ok(_permit) = semaphore.try_acquire() {
-                            let pool_clone = Arc::clone(&pool);
-                            let stats_clone = Arc::clone(&stats);
-
-                            tokio::spawn(async move {
-                                match Self::create_connection(remote_addr, source_ip).await {
-                                    Ok(stream) => {
-                                        pool_clone.lock().await.push_back(stream);
-                                        stats_clone.total_created.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                    Err(_) => {
-                                        stats_clone
-                                            .connection_failures
-                                            .fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
-                            });
-                        }
-                    }
                 }
 
                 // 清理失效连接
@@ -254,12 +226,29 @@ impl ConnectionPool {
                     // 失效的连接自动丢弃
                 }
 
+                let current_size = valid_connections.len();
                 *pool_guard = valid_connections;
+                drop(pool_guard); // 释放锁
+
+                // 如果低于目标大小，只补充一个连接（避免批量创建）
+                if current_size < pool_size {
+                    if let Ok(_permit) = semaphore.try_acquire() {
+                        match Self::create_connection(remote_addr, source_ip).await {
+                            Ok(stream) => {
+                                pool.lock().await.push_back(stream);
+                                stats.total_created.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(_) => {
+                                stats.connection_failures.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
             }
         });
     }
 
-    /// 触发异步补充任务（不阻塞）
+    /// 触发异步补充任务（延迟+节流，避免频繁连接）
     fn spawn_refill_task(&self) {
         let pool = Arc::clone(&self.pool);
         let remote_addr = self.remote_addr;
@@ -270,6 +259,13 @@ impl ConnectionPool {
         let semaphore = Arc::clone(&self.semaphore);
 
         tokio::spawn(async move {
+            if shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+
+            // 延迟补充（避免频繁连接）
+            time::sleep(Duration::from_millis(REFILL_DELAY_MS)).await;
+
             if shutdown.load(Ordering::Relaxed) {
                 return;
             }

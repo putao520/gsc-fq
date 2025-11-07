@@ -3,7 +3,7 @@ use crate::error::types::ProxyError;
 use crate::proxy::ConnectionPool;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{copy, AsyncReadExt};
 /// Stealth handler with blackhole mode for hiding protocol signatures
 /// Detects server rejections and enters blackhole mode to confuse active probing
 use tokio::net::TcpStream;
@@ -74,40 +74,17 @@ impl StealthHandler {
         }
     }
 
-    /// Test if remote server rejects connections
+    /// Test if remote server accepts connections (without sending data to avoid WAF triggers)
     async fn test_remote_connection(remote_addr: std::net::SocketAddr) -> Result<(), ProxyError> {
-        let mut test_stream =
+        // 只建立连接，不发送任何数据（避免触发 WAF/IDS）
+        let _test_stream =
             tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(remote_addr))
                 .await
                 .map_err(|_| ProxyError::ForwardingFailed("Connection timeout".to_string()))?
                 .map_err(|e| ProxyError::ForwardingFailed(format!("Connection failed: {}", e)))?;
 
-        // Try to send a test packet
-        let test_data = b"TEST";
-        let result =
-            tokio::time::timeout(Duration::from_millis(100), test_stream.write_all(test_data))
-                .await;
-
-        match result {
-            Ok(Ok(_)) => {
-                // Server accepted the data
-                Ok(())
-            }
-            Ok(Err(e)) => {
-                // Server rejected during write
-                if Self::is_io_rejection(&e) {
-                    Err(ProxyError::ForwardingFailed(
-                        "Server rejected data".to_string(),
-                    ))
-                } else {
-                    Err(ProxyError::ForwardingFailed(format!("Write error: {}", e)))
-                }
-            }
-            Err(_) => {
-                // Timeout - assume rejection
-                Err(ProxyError::ForwardingFailed("Server timeout".to_string()))
-            }
-        }
+        // 连接成功即可，不需要发送测试数据
+        Ok(())
     }
 
     /// Check if error indicates server rejection
