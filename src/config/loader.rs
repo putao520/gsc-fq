@@ -35,6 +35,10 @@ pub struct ProxySection {
     pub remote_host: String,
     pub remote_port: u16,
     pub source_ip: Option<String>,
+    /// Enable connection pool for this proxy (default: false)
+    pub pool_enabled: Option<bool>,
+    /// Connection pool size (default: 5, range: 1-20)
+    pub pool_size: Option<usize>,
 }
 
 impl ConfigFile {
@@ -124,6 +128,16 @@ impl ConfigFile {
                     ));
                 } else if trimmed != source_ip {
                     proxy.source_ip = Some(trimmed.to_string());
+                }
+            }
+
+            // Validate connection pool settings
+            if let Some(pool_size) = proxy.pool_size {
+                if pool_size == 0 || pool_size > 20 {
+                    errors.push(format!(
+                        "{}.pool_size must be between 1 and 20, got {}",
+                        prefix, pool_size
+                    ));
                 }
             }
         }
@@ -337,6 +351,8 @@ mod tests {
                 remote_host: "example.com".to_string(),
                 remote_port: 80,
                 source_ip: Some("invalid-ip".to_string()),
+                pool_enabled: None,
+                pool_size: None,
             }],
         };
 
@@ -415,12 +431,16 @@ remote_host = "example.com"
                     remote_host: "example.com".to_string(),
                     remote_port: 80,
                     source_ip: None,
+                    pool_enabled: None,
+                    pool_size: None,
                 },
                 ProxySection {
                     local_port: 8080,
                     remote_host: "example.net".to_string(),
                     remote_port: 8080,
                     source_ip: None,
+                    pool_enabled: None,
+                    pool_size: None,
                 },
             ],
         };

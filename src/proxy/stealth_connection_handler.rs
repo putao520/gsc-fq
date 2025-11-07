@@ -2,6 +2,7 @@ use crate::debug_println;
 use crate::error::types::ProxyError;
 use crate::error::Result;
 use crate::proxy::stealth_handler::StealthHandler;
+use crate::proxy::ConnectionPool;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ pub struct StealthConnectionHandler {
     #[allow(dead_code)] // Reserved for future source IP binding functionality
     source_ip: Option<std::net::IpAddr>,
     stats: Arc<StealthConnectionCounters>,
+    connection_pool: Option<Arc<ConnectionPool>>,
 }
 
 impl StealthConnectionHandler {
@@ -24,12 +26,13 @@ impl StealthConnectionHandler {
     pub fn new(
         remote_addr: SocketAddr,
         source_ip: Option<std::net::IpAddr>,
-        _extra_options: Option<&str>,
+        connection_pool: Option<Arc<ConnectionPool>>,
     ) -> Self {
         Self {
             remote_addr,
             source_ip,
             stats: Arc::new(StealthConnectionCounters::new()),
+            connection_pool,
         }
     }
 
@@ -47,7 +50,9 @@ impl StealthConnectionHandler {
         let client = self.apply_tcp_optimizations(client).await?;
 
         // Use StealthHandler which includes blackhole mode
-        match StealthHandler::handle_stealth(client, self.remote_addr).await {
+        match StealthHandler::handle_stealth(client, self.remote_addr, self.connection_pool.clone())
+            .await
+        {
             Ok(()) => {
                 debug_println!(
                     "Stealth handler completed successfully for {:?}",

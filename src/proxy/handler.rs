@@ -306,13 +306,13 @@ impl std::fmt::Display for ConnectionStats {
     }
 }
 
-/// Connection pool manager for handling multiple concurrent connections
-pub struct ConnectionPool {
+/// Handler pool manager for managing multiple concurrent connection handlers
+pub struct HandlerPool {
     handlers: Vec<Arc<ConnectionHandler>>,
 }
 
-impl ConnectionPool {
-    /// Create a new connection pool
+impl HandlerPool {
+    /// Create a new handler pool
     pub fn new() -> Self {
         Self {
             handlers: Vec::new(),
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_connection_pool() {
-        let mut pool = ConnectionPool::new();
+        let mut pool = HandlerPool::new();
 
         let handler1 = ConnectionHandler::new(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 8080),
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_pool_stats() {
-        let mut pool = ConnectionPool::new();
+        let mut pool = HandlerPool::new();
 
         let handler = ConnectionHandler::new(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 8080),

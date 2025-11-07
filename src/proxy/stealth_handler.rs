@@ -1,5 +1,7 @@
 use crate::debug_println;
 use crate::error::types::ProxyError;
+use crate::proxy::ConnectionPool;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 /// Stealth handler with blackhole mode for hiding protocol signatures
@@ -32,8 +34,23 @@ impl StealthHandler {
     pub async fn handle_stealth(
         client: TcpStream,
         remote_addr: std::net::SocketAddr,
+        connection_pool: Option<Arc<ConnectionPool>>,
     ) -> Result<(), ProxyError> {
-        // First, test the remote connection
+        // Try to acquire connection from pool first
+        if let Some(pool) = connection_pool {
+            match pool.acquire().await {
+                Ok(remote) => {
+                    debug_println!("✅ Acquired connection from pool");
+                    return Self::normal_forwarding(client, remote).await;
+                }
+                Err(e) => {
+                    debug_println!("⚠️  Pool acquisition failed: {}, falling back to direct connection", e);
+                    // Fall through to direct connection
+                }
+            }
+        }
+
+        // Fallback: test the remote connection
         match Self::test_remote_connection(remote_addr).await {
             Ok(()) => {
                 // Remote is responsive, use normal forwarding
