@@ -16,6 +16,8 @@ const REFILL_DELAY_MS: u64 = 2000; // 补充连接延迟 2s（避免频繁连接
 const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒（低频检查）
 const IDLE_SHRINK_THRESHOLD: usize = 5; // 空闲收缩阈值：连续5次检查池满则收缩
 const EXPANSION_MISS_THRESHOLD: f64 = 0.3; // 扩张阈值：miss率超过30%则考虑扩张
+const BLACKHOLE_FAILURE_THRESHOLD: u32 = 3; // 黑洞服务器检测阈值：连续3次连接失败
+const BLACKHOLE_DETECTION_TIMEOUT_SECS: u64 = 30; // 黑洞检测超时：30秒
 
 /// 连接池统计信息
 #[derive(Debug, Default)]
@@ -28,6 +30,10 @@ pub struct PoolStats {
     pub pool_misses: AtomicU64,
     /// 连接失败次数
     pub connection_failures: AtomicU64,
+    /// 连续连接失败次数（用于黑洞检测）
+    pub consecutive_failures: AtomicU64,
+    /// 服务器是否被标记为黑洞
+    pub is_blackhole: AtomicBool,
 }
 
 /// 预热连接池
@@ -90,14 +96,16 @@ impl ConnectionPool {
         Ok(())
     }
 
-    /// 预热连接池（串行+延迟，避免触发防火墙）
+    /// 预热连接池（串行+延迟+黑洞检测，避免触发防火墙）
     ///
     /// 安全策略：
     /// 1. 串行创建连接（避免并发连接风暴）
     /// 2. 每个连接之间延迟 500ms（缓慢建立，模拟正常流量模式）
     /// 3. 失败时不重试（避免反复触发防火墙）
+    /// 4. 黑洞检测：连续3次失败则标记为黑洞服务器，停止预热
     async fn preheat_pool(&self) -> Result<()> {
         let initial_size = INITIAL_POOL_SIZE;
+        let mut consecutive_failures = 0u32;
 
         for i in 0..initial_size {
             // 添加延迟（第一个连接除外）
@@ -109,11 +117,33 @@ impl ConnectionPool {
                 Ok(stream) => {
                     self.pool.lock().await.push_back(stream);
                     self.stats.total_created.fetch_add(1, Ordering::Relaxed);
+                    // 成功连接，重置连续失败计数
+                    consecutive_failures = 0;
+                    self.stats.consecutive_failures.store(0, Ordering::Relaxed);
+
+                    // 如果已经有成功连接，且成功率达到一定比例，可以提前结束预热
+                    let created_count = self.stats.total_created.load(Ordering::Relaxed);
+                    if created_count >= 3 { // 至少有3个成功连接就足够测试了
+                        eprintln!("✅ Preheat completed: {} connections created", created_count);
+                        break;
+                    }
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Failed to preheat connection {}/{}: {}", i + 1, initial_size, e);
+                    consecutive_failures += 1;
                     self.stats.connection_failures.fetch_add(1, Ordering::Relaxed);
-                    // 失败时不中断，继续尝试剩余连接
+                    self.stats.consecutive_failures.store(consecutive_failures as u64, Ordering::Relaxed);
+
+                    eprintln!("⚠️  Failed to preheat connection {}/{}: {}", i + 1, initial_size, e);
+
+                    // 黑洞检测：连续3次失败则标记为黑洞服务器
+                    if consecutive_failures >= BLACKHOLE_FAILURE_THRESHOLD {
+                        self.stats.is_blackhole.store(true, Ordering::Relaxed);
+                        eprintln!("🕳️  Blackhole server detected: {} consecutive failures", consecutive_failures);
+                        eprintln!("⏹️  Stopping preheat for blackhole server");
+                        break;
+                    }
+
+                    // 失败但不达到黑洞阈值时，继续尝试剩余连接
                 }
             }
         }
@@ -124,13 +154,23 @@ impl ConnectionPool {
     /// 从池中获取连接
     ///
     /// 如果池中有可用连接，立即返回；否则现场创建新连接。
+    /// 如果服务器被标记为黑洞，则直接返回黑洞错误。
     pub async fn acquire(&self) -> Result<TcpStream> {
+        // 检查是否为黑洞服务器
+        if self.stats.is_blackhole.load(Ordering::Relaxed) {
+            return Err(crate::error::ProxyError::ConnectionPoolError(
+                "Target server is marked as blackhole (unreachable)".to_string()
+            ).into());
+        }
+
         // 尝试从池中获取
         if let Some(stream) = self.pool.lock().await.pop_front() {
             self.stats.pool_hits.fetch_add(1, Ordering::Relaxed);
 
             // 验证连接是否仍然有效
             if Self::is_connection_alive(&stream).await {
+                // 成功获取连接，重置连续失败计数
+                self.stats.consecutive_failures.store(0, Ordering::Relaxed);
                 // 触发异步补充（不等待）
                 self.spawn_refill_task();
                 return Ok(stream);
@@ -146,12 +186,24 @@ impl ConnectionPool {
         match Self::create_connection(self.remote_addr, self.source_ip).await {
             Ok(stream) => {
                 self.stats.total_created.fetch_add(1, Ordering::Relaxed);
+                // 成功创建连接，重置连续失败计数
+                self.stats.consecutive_failures.store(0, Ordering::Relaxed);
                 // 触发异步补充
                 self.spawn_refill_task();
                 Ok(stream)
             }
             Err(e) => {
                 self.stats.connection_failures.fetch_add(1, Ordering::Relaxed);
+
+                // 更新连续失败次数
+                let consecutive_failures = self.stats.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
+
+                // 检查是否达到黑洞阈值
+                if consecutive_failures >= BLACKHOLE_FAILURE_THRESHOLD as u64 {
+                    self.stats.is_blackhole.store(true, Ordering::Relaxed);
+                    eprintln!("🕳️  Server marked as blackhole: {} consecutive failures", consecutive_failures);
+                }
+
                 Err(e)
             }
         }
@@ -350,6 +402,8 @@ impl ConnectionPool {
             pool_hits: self.stats.pool_hits.load(Ordering::Relaxed),
             pool_misses: self.stats.pool_misses.load(Ordering::Relaxed),
             connection_failures: self.stats.connection_failures.load(Ordering::Relaxed),
+            consecutive_failures: self.stats.consecutive_failures.load(Ordering::Relaxed),
+            is_blackhole: self.stats.is_blackhole.load(Ordering::Relaxed),
         }
     }
 
@@ -370,6 +424,8 @@ pub struct PoolStatsSnapshot {
     pub pool_hits: u64,
     pub pool_misses: u64,
     pub connection_failures: u64,
+    pub consecutive_failures: u64,
+    pub is_blackhole: bool,
 }
 
 impl PoolStatsSnapshot {
