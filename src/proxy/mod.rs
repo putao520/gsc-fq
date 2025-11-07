@@ -1,4 +1,5 @@
 pub mod blackhole;
+pub mod connection_pool;
 pub mod handler;
 pub mod high_perf;
 pub mod resilient;
@@ -9,6 +10,7 @@ pub mod stealth_handler;
 pub mod zero_copy;
 
 pub use blackhole::*;
+pub use connection_pool::*;
 pub use handler::*;
 pub use high_perf::*;
 pub use resilient::*;
