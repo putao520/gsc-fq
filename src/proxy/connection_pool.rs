@@ -10,11 +10,22 @@ use tokio::time;
 
 // 自适应连接池策略（防止触发防火墙）
 const INITIAL_POOL_SIZE: usize = 3; // 初始池大小：3个连接（启动时保守）
-const MAX_POOL_SIZE: usize = 10; // 最大池大小：10个连接（运行时可扩张）
+const DEFAULT_MAX_POOL_SIZE: usize = 10; // 默认最大池大小：10个连接
+const ABSOLUTE_MAX_POOL_SIZE: usize = 100; // 绝对最大值：100（安全上限）
 const PREHEAT_DELAY_MS: u64 = 500; // 预热时每个连接间隔 500ms（避免连接风暴）
 const REFILL_DELAY_MS: u64 = 2000; // 补充连接延迟 2s（缓慢扩张，避免频繁连接）
 const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒（低频检查）
 const IDLE_SHRINK_THRESHOLD: usize = 5; // 空闲收缩阈值：连续5次检查池满则收缩
+const EXPANSION_MISS_THRESHOLD: f64 = 0.3; // 扩张阈值：miss率超过30%则考虑扩张
+
+/// 从环境变量读取最大池大小
+fn get_max_pool_size() -> usize {
+    std::env::var("GSC_FQ_MAX_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_POOL_SIZE)
+        .clamp(INITIAL_POOL_SIZE, ABSOLUTE_MAX_POOL_SIZE)
+}
 
 /// 连接池统计信息
 #[derive(Debug, Default)]
@@ -40,6 +51,8 @@ pub struct ConnectionPool {
     source_ip: Option<IpAddr>,
     /// 连接池当前目标大小（可自适应扩张）
     pool_size: Arc<AtomicUsize>,
+    /// 最大池大小（用户可配置）
+    max_pool_size: usize,
     /// 连接队列（FIFO）
     pool: Arc<Mutex<VecDeque<TcpStream>>>,
     /// 统计信息
@@ -60,18 +73,30 @@ impl ConnectionPool {
     /// # 安全策略
     /// 使用自适应策略，平衡安全与性能：
     /// - 初始：3个连接（启动时保守，避免触发防火墙）
-    /// - 最大：10个连接（运行时渐进扩张，满足高并发需求）
+    /// - 最大：10个连接（默认），可通过环境变量 GSC_FQ_MAX_POOL_SIZE 配置
     /// - 预热间隔：500ms（避免被识别为端口扫描）
     /// - 扩张延迟：2秒（缓慢扩张，避免连接风暴）
+    /// - 自适应扩张：根据 miss 率自动调整池大小
     pub fn new(remote_addr: SocketAddr, source_ip: Option<IpAddr>) -> Self {
+        let max_pool_size = get_max_pool_size();
+
+        // 启动时打印配置信息
+        if max_pool_size != DEFAULT_MAX_POOL_SIZE {
+            eprintln!(
+                "⚙️  Connection pool max size: {} (from GSC_FQ_MAX_POOL_SIZE)",
+                max_pool_size
+            );
+        }
+
         Self {
             remote_addr,
             source_ip,
             pool_size: Arc::new(AtomicUsize::new(INITIAL_POOL_SIZE)),
-            pool: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_POOL_SIZE))),
+            max_pool_size,
+            pool: Arc::new(Mutex::new(VecDeque::with_capacity(max_pool_size))),
             stats: Arc::new(PoolStats::default()),
             shutdown: Arc::new(AtomicBool::new(false)),
-            semaphore: Arc::new(Semaphore::new(MAX_POOL_SIZE * 2)),
+            semaphore: Arc::new(Semaphore::new(max_pool_size * 2)),
         }
     }
 
@@ -268,15 +293,19 @@ impl ConnectionPool {
 
     /// 触发异步补充任务（延迟+节流+自适应扩张）
     ///
-    /// 渐进式扩张策略：
+    /// 自适应扩张策略：
     /// 1. 延迟2秒后补充（避免频繁连接）
     /// 2. 只补充一个连接（避免突发）
-    /// 3. 如果持续有需求，目标大小逐步从3扩张到10
+    /// 3. 根据 miss 率智能扩张：
+    ///    - miss率 > 30%: 考虑扩张池大小
+    ///    - 池已满: 增加目标大小
+    ///    - 最大限制: 用户配置的 max_pool_size
     fn spawn_refill_task(&self) {
         let pool = Arc::clone(&self.pool);
         let remote_addr = self.remote_addr;
         let source_ip = self.source_ip;
         let pool_size = Arc::clone(&self.pool_size);
+        let max_pool_size = self.max_pool_size;
         let stats = Arc::clone(&self.stats);
         let shutdown = Arc::clone(&self.shutdown);
         let semaphore = Arc::clone(&self.semaphore);
@@ -296,6 +325,16 @@ impl ConnectionPool {
             let current_size = pool.lock().await.len();
             let target_size = pool_size.load(Ordering::Relaxed);
 
+            // 计算 miss 率，决定是否需要扩张
+            let hits = stats.pool_hits.load(Ordering::Relaxed);
+            let misses = stats.pool_misses.load(Ordering::Relaxed);
+            let total = hits + misses;
+            let miss_rate = if total > 0 {
+                misses as f64 / total as f64
+            } else {
+                0.0
+            };
+
             // 只补充一个连接
             if current_size < target_size {
                 if let Ok(_permit) = semaphore.try_acquire() {
@@ -304,9 +343,19 @@ impl ConnectionPool {
                             pool.lock().await.push_back(stream);
                             stats.total_created.fetch_add(1, Ordering::Relaxed);
 
-                            // 渐进式扩张：如果池已满但还有需求，增加目标大小
-                            if current_size + 1 >= target_size && target_size < MAX_POOL_SIZE {
-                                pool_size.store(target_size + 1, Ordering::Relaxed);
+                            // 自适应扩张：根据 miss 率和池状态决定是否扩张
+                            if current_size + 1 >= target_size
+                                && target_size < max_pool_size
+                                && miss_rate > EXPANSION_MISS_THRESHOLD
+                            {
+                                let new_size = target_size + 1;
+                                pool_size.store(new_size, Ordering::Relaxed);
+                                eprintln!(
+                                    "📈 Pool expanding: {} -> {} (miss rate: {:.1}%)",
+                                    target_size,
+                                    new_size,
+                                    miss_rate * 100.0
+                                );
                             }
                         }
                         Err(_) => {
