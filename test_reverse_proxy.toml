@@ -1,0 +1,13 @@
+[server]
+bind_ip = "0.0.0.0"
+debug = true
+
+# 简化配置示例
+[[reverse_proxies]]
+port = 8080
+
+# 完整配置示例
+[[reverse_proxies]]
+server_port = 8081
+local_host = "localhost"
+local_port = 8000

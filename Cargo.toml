@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "gsc-fq"
 version = "0.3.8"
 edition = "2021"
@@ -13,37 +13,41 @@ categories = ["network-programming", "command-line-utilities"]
 readme = "README.md"
 
 [dependencies]
-# 异步运行时
+# 寮傛杩愯鏃?
 tokio = { version = "1.40", features = ["full"] }
 
-# 配置文件解析
+# 閰嶇疆鏂囦欢瑙ｆ瀽
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 
-# 错误处理
+# 閿欒澶勭悊
 thiserror = "1.0"
 anyhow = "1.0"
 
-# 日志系统
+# 鏃ュ織绯荤粺
 env_logger = "0.11"
 
-# 网络和系统调用
+# 缃戠粶鍜岀郴缁熻皟鐢?
 socket2 = { version = "0.5", features = ["all"] }
 nix = { version = "0.29", features = ["socket", "net", "uio", "zerocopy"] }
 
 
 # 并发工具
-tokio-util = { version = "0.7", features = ["codec", "io"] }
+tokio-util = { version = "0.7", features = ["codec", "io", "compat"] }
+yamux = "0.10"
 futures = "0.3"
 
-# 高性能字节缓冲区
+# 楂樻€ц兘瀛楄妭缂撳啿鍖?
 bytes = "1.5"
 
-# 系统信息
+# 绯荤粺淇℃伅
 num_cpus = "1.16"
 
-# UUID生成
+# UUID鐢熸垚
 uuid = { version = "1.0", features = ["v4"] }
+
+# 二进制序列化（反向代理协议）
+bincode = "1.3"
 
 [features]
 default = []

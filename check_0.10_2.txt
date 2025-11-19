@@ -1,0 +1,190 @@
+﻿cargo :     Checking gsc-fq v0.3.8 (E:\code\rust\gsc-fq)
+所在位置 行:1 字符: 1
++ cargo check 2>&1 | Out-File -Encoding utf8 check_0.10_2.txt
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking gs...de\rust\gsc-fq):Strin 
+   g) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: unused import: `AsyncReadExt`
+ --> src\reverse_proxy\server.rs:8:37
+  |
+8 | use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
+  |                                     ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `TokioAsyncWriteCompatExt`
+  --> src\reverse_proxy\server.rs:12:78
+   |
+12 | use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt, Tok
+ioAsyncWriteCompatExt};
+   |                                                                              ^^^
+^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ReverseProxySection`
+ --> src\reverse_proxy\client.rs:1:41
+  |
+1 | use crate::config::loader::{ConfigFile, ReverseProxySection};
+  |                                         ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `TokioAsyncWriteCompatExt`
+ --> src\reverse_proxy\client.rs:9:78
+  |
+9 | use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt, Toki
+oAsyncWriteCompatExt};
+  |                                                                              ^^^^
+^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::Path`
+ --> src\utils\system.rs:3:5
+  |
+3 | use std::path::Path;
+  |     ^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src\reverse_proxy\server.rs:147:13
+    |
+147 |         let mut yamux_control = conn.control();
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+error[E0277]: `{async block@yamux::into_stream<Compat<tokio::net::TcpStream>>::{closu
+re#0}::{closure#0}}` cannot be unpinned
+    --> src\reverse_proxy\client.rs:115:50
+     |
+ 115 |         while let Some(stream_result) = incoming.next().await {
+     |                                                  ^^^^ unsatisfied trait bound
+     |
+     = help: within `__Origin<'_, Connection<Compat<TcpStream>>, ...>`, the trait `Un
+pin` is not implemented for `{async block@yamux::into_stream<Compat<tokio::net::TcpSt
+ream>>::{closure#0}::{closure#0}}`
+     = note: consider using the `pin!` macro
+             consider using `Box::pin` if you need to access the pinned value outside
+ of the current scope
+note: required because it appears within the type `__Origin<'_, Connection<Compat<Tcp
+Stream>>, ...>`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-u
+til-0.3.31\src\unfold_state.rs:5:1
+     |
+   5 | / pin_project! {
+   6 | |     /// UnfoldState used for stream and sink unfolds
+   7 | |     #[project = UnfoldStateProj]
+   8 | |     #[project_replace = UnfoldStateProjReplace]
+...    |
+  20 | | }
+     | |_^
+     = note: required for `UnfoldState<Connection<Compat<TcpStream>>, ...>` to implem
+ent `Unpin`
+note: required because it appears within the type `__Origin<'_, Connection<Compat<Tcp
+Stream>>, {closure@...}, ...>`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-u
+til-0.3.31\src\stream\unfold.rs:58:1
+     |
+  58 | / pin_project! {
+  59 | |     /// Stream for the [`unfold`] function.
+  60 | |     #[must_use = "streams do nothing unless polled"]
+  61 | |     pub struct Unfold<T, F, Fut> {
+...    |
+  66 | | }
+     | |_^
+     = note: required for `Unfold<Connection<Compat<TcpStream>>, {closure@...}, ...>`
+ to implement `Unpin`
+note: required because it appears within the type `impl futures::Stream<Item = std::r
+esult::Result<yamux::Stream, ConnectionError>>`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yamux-0.1
+0.2\src\connection.rs:1083:44
+     |
+1083 | pub fn into_stream<T>(c: Connection<T>) -> impl futures::stream::Stream<Item =
+ Result<Stream>>
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^
+note: required by a bound in `futures::StreamExt::next`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-u
+til-0.3.31\src\stream\stream\mod.rs:275:15
+     |
+ 273 |     fn next(&mut self) -> Next<'_, Self>
+     |        ---- required by a bound in this associated function
+ 274 |     where
+ 275 |         Self: Unpin,
+     |               ^^^^^ required by this bound in `StreamExt::next`
+     = note: the full name for the type has been written to 'E:\code\rust\gsc-fq\targ
+et\debug\deps\gsc_fq-d0b3ddf4fe0acbf9.long-type-11100570663864836498.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+     = note: this error originates in the macro `$crate::__pin_project_make_unpin_imp
+l` which comes from the expansion of the macro `pin_project` (in Nightly builds, run 
+with -Z macro-backtrace for more info)
+
+error[E0277]: `{async block@yamux::into_stream<Compat<tokio::net::TcpStream>>::{closu
+re#0}::{closure#0}}` cannot be unpinned
+    --> src\reverse_proxy\client.rs:115:57
+     |
+ 115 |         while let Some(stream_result) = incoming.next().await {
+     |                                                         ^^^^^ unsatisfied trai
+t bound
+     |
+     = help: within `__Origin<'_, Connection<Compat<TcpStream>>, ...>`, the trait `Un
+pin` is not implemented for `{async block@yamux::into_stream<Compat<tokio::net::TcpSt
+ream>>::{closure#0}::{closure#0}}`
+     = note: consider using the `pin!` macro
+             consider using `Box::pin` if you need to access the pinned value outside
+ of the current scope
+note: required because it appears within the type `__Origin<'_, Connection<Compat<Tcp
+Stream>>, ...>`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-u
+til-0.3.31\src\unfold_state.rs:5:1
+     |
+   5 | / pin_project! {
+   6 | |     /// UnfoldState used for stream and sink unfolds
+   7 | |     #[project = UnfoldStateProj]
+   8 | |     #[project_replace = UnfoldStateProjReplace]
+...    |
+  20 | | }
+     | |_^
+     = note: required for `UnfoldState<Connection<Compat<TcpStream>>, ...>` to implem
+ent `Unpin`
+note: required because it appears within the type `__Origin<'_, Connection<Compat<Tcp
+Stream>>, {closure@...}, ...>`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\futures-u
+til-0.3.31\src\stream\unfold.rs:58:1
+     |
+  58 | / pin_project! {
+  59 | |     /// Stream for the [`unfold`] function.
+  60 | |     #[must_use = "streams do nothing unless polled"]
+  61 | |     pub struct Unfold<T, F, Fut> {
+...    |
+  66 | | }
+     | |_^
+     = note: required for `Unfold<Connection<Compat<TcpStream>>, {closure@...}, ...>`
+ to implement `Unpin`
+note: required because it appears within the type `impl futures::Stream<Item = std::r
+esult::Result<yamux::Stream, ConnectionError>>`
+    --> C:\Users\putao\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yamux-0.1
+0.2\src\connection.rs:1083:44
+     |
+1083 | pub fn into_stream<T>(c: Connection<T>) -> impl futures::stream::Stream<Item =
+ Result<Stream>>
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^
+     = note: required for `Next<'_, impl futures::Stream<Item = std::result::Result<y
+amux::Stream, ConnectionError>>>` to implement `futures::Future`
+     = note: required for `Next<'_, impl futures::Stream<Item = std::result::Result<y
+amux::Stream, ConnectionError>>>` to implement `std::future::IntoFuture`
+     = note: the full name for the type has been written to 'E:\code\rust\gsc-fq\targ
+et\debug\deps\gsc_fq-d0b3ddf4fe0acbf9.long-type-13867292262486950768.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+     = note: this error originates in the macro `$crate::__pin_project_make_unpin_imp
+l` which comes from the expansion of the macro `pin_project` (in Nightly builds, run 
+with -Z macro-backtrace for more info)
+help: remove the `.await`
+     |
+ 115 -         while let Some(stream_result) = incoming.next().await {
+ 115 +         while let Some(stream_result) = incoming.next() {
+     |
+
+For more information about this error, try `rustc --explain E0277`.
+warning: `gsc-fq` (lib) generated 6 warnings
+error: could not compile `gsc-fq` (lib) due to 2 previous errors; 6 warnings emitted

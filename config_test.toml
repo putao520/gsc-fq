@@ -1,0 +1,7 @@
+[[reverse_proxies]]
+server_port = 7003
+local_port = 8080
+local_host = "127.0.0.1"
+
+[server]
+debug = true

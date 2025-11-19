@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("System error: {0}")]
     System(#[from] SystemError),
 
+    #[error("Reverse proxy error: {0}")]
+    ReverseProxy(#[from] ReverseProxyError),
+
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
@@ -167,6 +170,40 @@ pub enum SystemError {
 
     #[error("System resource exhausted: {0}")]
     ResourceExhausted(String),
+}
+
+/// Reverse proxy related errors
+#[derive(Error, Debug)]
+pub enum ReverseProxyError {
+    #[error("Protocol error: {0}")]
+    ProtocolError(String),
+
+    #[error("Handshake failed: {0}")]
+    HandshakeFailed(String),
+
+    #[error("Client disconnected")]
+    ClientDisconnected,
+
+    #[error("Invalid message: {0}")]
+    InvalidMessage(String),
+
+    #[error("Message serialization failed: {0}")]
+    SerializationFailed(String),
+
+    #[error("Message deserialization failed: {0}")]
+    DeserializationFailed(String),
+
+    #[error("Control channel error: {0}")]
+    ControlChannelError(String),
+
+    #[error("Port allocation failed: {0}")]
+    PortAllocationFailed(String),
+
+    #[error("Connection multiplexing error: {0}")]
+    MultiplexingError(String),
+
+    #[error("Unsupported protocol version: {0}")]
+    UnsupportedVersion(u8),
 }
 
 impl AppError {

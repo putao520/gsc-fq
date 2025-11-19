@@ -1,0 +1,17 @@
+[server]
+bind_ip = "127.0.0.1"
+
+[[proxies]]
+local_port = 33100
+remote_host = "198.51.100.10"
+remote_port = 8080
+
+[[proxies]]
+local_port = 33200
+remote_host = "198.51.100.20"
+remote_port = 8080
+
+[[proxies]]
+local_port = 33300
+remote_host = "198.51.100.30"
+remote_port = 8080

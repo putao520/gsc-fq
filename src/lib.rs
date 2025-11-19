@@ -10,6 +10,7 @@
 pub mod config;
 pub mod error;
 pub mod proxy;
+pub mod reverse_proxy;
 pub mod utils;
 
 // 重新导出主要类型和函数

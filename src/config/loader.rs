@@ -9,7 +9,10 @@ use crate::error::{AppError, ConfigError, Result};
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
     pub server: Option<ServerSection>,
+    #[serde(default)]
     pub proxies: Vec<ProxySection>,
+    #[serde(default)]
+    pub reverse_proxies: Vec<ReverseProxySection>,
 }
 
 /// Server configuration section
@@ -37,6 +40,37 @@ pub struct ProxySection {
     pub source_ip: Option<String>,
 }
 
+/// Reverse proxy configuration section
+#[derive(Debug, Deserialize, Clone)]
+pub struct ReverseProxySection {
+    // Port configuration - either use `port` (same on both sides)
+    // or `server_port` + `local_port` (different ports)
+    pub port: Option<u16>,
+    pub server_port: Option<u16>,
+    pub local_port: Option<u16>,
+    
+    pub local_host: Option<String>,
+    pub source_ip: Option<String>,
+}
+
+impl ReverseProxySection {
+    /// Get the server port (from either `port` or `server_port`)
+    pub fn get_server_port(&self) -> Option<u16> {
+        self.port.or(self.server_port)
+    }
+    
+    /// Get the local port (from either `port` or `local_port`)
+    pub fn get_local_port(&self) -> Option<u16> {
+        self.port.or(self.local_port)
+    }
+    
+    /// Get the local host (returns "localhost" if not specified)
+    pub fn get_local_host(&self) -> String {
+        self.local_host.clone()
+            .unwrap_or_else(|| "localhost".to_string())
+    }
+}
+
 impl ConfigFile {
     /// Validate configuration integrity and return non-fatal warnings
     pub fn validate(&mut self) -> std::result::Result<Vec<String>, ConfigError> {
@@ -45,9 +79,9 @@ impl ConfigFile {
         let mut warnings = Vec::new();
         let mut errors = Vec::new();
 
-        // 配置文件必须有代理规则
-        if self.proxies.is_empty() {
-            errors.push("No proxy configurations found in default.toml".to_string());
+        // 配置文件必须有代理规则（正向或反向）
+        if self.proxies.is_empty() && self.reverse_proxies.is_empty() {
+            errors.push("No proxy configurations found (neither proxies nor reverse_proxies)".to_string());
         }
 
         if let Some(server) = self.server.as_mut() {
@@ -124,6 +158,89 @@ impl ConfigFile {
                     ));
                 } else if trimmed != source_ip {
                     proxy.source_ip = Some(trimmed.to_string());
+                }
+            }
+        }
+
+        // Validate reverse_proxies
+        let mut reverse_server_ports = HashSet::new();
+        
+        for (index, rproxy) in self.reverse_proxies.iter_mut().enumerate() {
+            let prefix = format!("reverse_proxies[{}]", index);
+            
+            // Port configuration validation
+            let has_port = rproxy.port.is_some();
+            let has_server_port = rproxy.server_port.is_some();
+            let has_local_port = rproxy.local_port.is_some();
+            
+            if has_port && (has_server_port || has_local_port) {
+                errors.push(format!(
+                    "{}: cannot specify 'port' together with 'server_port' or 'local_port'",
+                    prefix
+                ));
+            } else if !has_port && !(has_server_port && has_local_port) {
+                errors.push(format!(
+                    "{}: must specify either 'port' or both 'server_port' and 'local_port'",
+                    prefix
+                ));
+            }
+            
+            // Validate server port
+            if let Some(server_port) = rproxy.get_server_port() {
+                if server_port == 0 {
+                    errors.push(format!("{}: server_port must be between 1 and 65535", prefix));
+                }
+                if !reverse_server_ports.insert(server_port) {
+                    errors.push(format!(
+                        "Duplicate server_port {} detected in {}",
+                        server_port, prefix
+                    ));
+                }
+            }
+            
+            // Validate local port
+            if let Some(local_port) = rproxy.get_local_port() {
+                if local_port == 0 {
+                    errors.push(format!("{}: local_port must be between 1 and 65535", prefix));
+                }
+            }
+            
+            // Validate local_host (trim and set default)
+            if let Some(ref host) = rproxy.local_host {
+                let trimmed = host.trim();
+                if trimmed.is_empty() {
+                    rproxy.local_host = None; // Will use default "localhost"
+                } else if trimmed != host {
+                    rproxy.local_host = Some(trimmed.to_string());
+                }
+            }
+            
+            // Validate source_ip
+            if let Some(source_ip) = rproxy.source_ip.clone() {
+                let trimmed = source_ip.trim();
+                
+                if trimmed.is_empty() {
+                    warnings.push(format!("{}.source_ip is empty and will be ignored", prefix));
+                    rproxy.source_ip = None;
+                    continue;
+                }
+                
+                if trimmed.eq_ignore_ascii_case("null") {
+                    warnings.push(format!(
+                        "{}.source_ip contains invalid 'null' value; the field will be ignored",
+                        prefix
+                    ));
+                    rproxy.source_ip = None;
+                    continue;
+                }
+                
+                if trimmed.parse::<IpAddr>().is_err() {
+                    errors.push(format!(
+                        "{}.source_ip '{}' is not a valid IP address",
+                        prefix, trimmed
+                    ));
+                } else if trimmed != source_ip {
+                    rproxy.source_ip = Some(trimmed.to_string());
                 }
             }
         }
