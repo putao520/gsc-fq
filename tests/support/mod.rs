@@ -3,8 +3,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use gsc_fq::config::loader::{ConfigFile, ReverseProxySection, ServerSection};
 use gsc_fq::proxy::ProxyInstance;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -181,4 +183,180 @@ pub fn pick_available_port() -> Result<u16> {
         .port();
     drop(listener);
     Ok(port)
+}
+
+pub struct PingPongServer {
+    addr: SocketAddr,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl PingPongServer {
+    pub async fn start() -> io::Result<Self> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+        
+        let handle = tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((socket, _)) => {
+                        tokio::spawn(async move {
+                            Self::handle_connection(socket).await;
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            addr,
+            handle: Some(handle),
+        })
+    }
+
+    async fn handle_connection(mut socket: TcpStream) {
+        let (reader, mut writer) = socket.split();
+        let mut reader = BufReader::new(reader);
+        let mut request_line = String::new();
+        
+        if reader.read_line(&mut request_line).await.is_err() {
+            return;
+        }
+
+        let mut headers_done = false;
+        let mut line = String::new();
+        while !headers_done {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    if line == "\r\n" || line == "\n" {
+                        headers_done = true;
+                    }
+                }
+            }
+        }
+
+        let response = if request_line.contains("/ping") {
+            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nPONG"
+        } else {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found"
+        };
+
+        let _ = writer.write_all(response.as_bytes()).await;
+    }
+
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    pub fn port(&self) -> u16 {
+        self.addr.port()
+    }
+
+    pub async fn shutdown(mut self) -> io::Result<()> {
+        if let Some(mut handle) = self.handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PingPongServer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+pub struct ReverseProxyServerHandle {
+    control_port: u16,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl ReverseProxyServerHandle {
+    pub async fn start(control_port: u16) -> Result<Self> {
+        let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        
+        let handle = tokio::spawn(async move {
+            let mut server = ReverseProxyServer::new(bind_ip, control_port);
+            let _ = server.start().await;
+        });
+
+        wait_for_port_ready(control_port, Duration::from_secs(5))
+            .await
+            .context("reverse proxy server failed to bind within timeout")?;
+
+        Ok(Self {
+            control_port,
+            handle: Some(handle),
+        })
+    }
+
+    pub fn control_port(&self) -> u16 {
+        self.control_port
+    }
+
+    pub async fn shutdown(mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for ReverseProxyServerHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+pub struct ReverseProxyClientHandle {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl ReverseProxyClientHandle {
+    pub async fn start(
+        server_addr: SocketAddr,
+        reverse_proxies: Vec<ReverseProxySection>,
+    ) -> Result<Self> {
+        let config = ConfigFile {
+            server: Some(ServerSection {
+                bind_ip: Some("127.0.0.1".to_string()),
+                debug: Some(false),
+            }),
+            proxies: Vec::new(),
+            reverse_proxies,
+        };
+
+        let handle = tokio::spawn(async move {
+            let mut client = ReverseProxyClient::new(server_addr, config);
+            let _ = client.start().await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        Ok(Self {
+            handle: Some(handle),
+        })
+    }
+
+    pub async fn shutdown(mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for ReverseProxyClientHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
 }

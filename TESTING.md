@@ -126,13 +126,15 @@ mod tests {
 ### 3.1 测试位置
 
 集成测试位于 `tests/` 目录：
-- `tests/real_e2e_integration_test.rs` - 完整端到端测试
-- `tests/simple_e2e_test.rs` - 简化的端到端测试
+- `tests/proxy_functionality_test.rs` - 正向代理功能测试
+- `tests/blackhole_functionality_test.rs` - 黑洞服务器检测测试
+- `tests/reverse_proxy_e2e_test.rs` - 反向代理端到端测试
 
 ### 3.2 测试目标
 
-- **代理功能测试**: 验证正向代理转发功能
+- **正向代理功能测试**: 验证正向代理转发功能
 - **黑洞检测测试**: 验证黑洞服务器检测
+- **反向代理E2E测试**: 验证反向代理服务器和客户端模式
 - **多规则测试**: 验证多个代理规则协同工作
 - **高并发测试**: 验证高并发连接处理
 
@@ -145,17 +147,52 @@ cargo test --test '*'
 # 运行特定集成测试
 cargo test --test proxy_functionality_test
 cargo test --test blackhole_functionality_test
-cargo test --test real_e2e_integration_test
-cargo test --test simple_e2e_test
+cargo test --test reverse_proxy_e2e_test
 
 # 显示输出
-cargo test --test real_e2e_integration_test -- --nocapture
+cargo test --test reverse_proxy_e2e_test -- --nocapture
 
 # 运行单线程
-cargo test --test real_e2e_integration_test -- --test-threads=1
+cargo test --test reverse_proxy_e2e_test -- --test-threads=1
+
+# 运行特定的反向代理测试
+cargo test test_reverse_proxy_server_client_ping_pong -- --nocapture
+cargo test test_reverse_proxy_multiple_ports -- --nocapture
+cargo test test_reverse_proxy_multiple_connections -- --nocapture
 ```
 
-### 3.4 集成测试结构
+### 3.4 反向代理E2E测试详情
+
+反向代理测试验证服务器和客户端模式的完整功能。
+
+#### 测试场景
+
+1. **test_reverse_proxy_server_client_ping_pong**
+   - 基础反向代理功能测试
+   - 使用简单的HTTP PING/PONG服务器
+   - 验证完整的请求-响应流程
+
+2. **test_reverse_proxy_multiple_ports**
+   - 测试同时暴露多个端口
+   - 验证多个服务的独立转发
+
+3. **test_reverse_proxy_multiple_connections**
+   - 测试并发连接处理
+   - 验证yamux多路复用
+
+4. **test_reverse_proxy_with_port_shorthand**
+   - 测试简化的端口配置语法
+   - 验证`port`字段的正确性
+
+#### 测试工具
+
+- **PingPongServer**: 简单的HTTP服务器，响应`/ping`返回`PONG`
+- **ReverseProxyServerHandle**: 管理反向代理服务器生命周期
+- **ReverseProxyClientHandle**: 管理反向代理客户端生命周期
+
+详细信息请参考 `REVERSE_PROXY_E2E_TEST.md` 和 `tests/README.md`。
+
+### 3.5 集成测试结构
 
 ```rust
 #[tokio::test]
