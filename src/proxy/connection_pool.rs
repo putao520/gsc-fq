@@ -8,11 +8,11 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time;
 
-// 自适应连接池策略（防止触发防火墙）
-const INITIAL_POOL_SIZE: usize = 15; // 初始池大小：15个连接
-const MAX_POOL_SIZE: usize = 30; // 最大池大小：30个连接（可自适应扩张）
-const PREHEAT_DELAY_MS: u64 = 500; // 预热时每个连接间隔 500ms（缓慢建立，避免连接风暴）
-const REFILL_DELAY_MS: u64 = 2000; // 补充连接延迟 2s（避免频繁连接）
+// 优化后的连接池策略（性能优先，仍保持安全性）
+const INITIAL_POOL_SIZE: usize = 50; // 初始池大小：50个连接（提升3.3倍）
+const MAX_POOL_SIZE: usize = 200; // 最大池大小：200个连接（提升6.7倍，支持高并发）
+const PREHEAT_DELAY_MS: u64 = 100; // 预热时每个连接间隔 100ms（加速预热，5秒完成）
+const REFILL_DELAY_MS: u64 = 1000; // 补充连接延迟 1s（降低延迟，更快响应）
 const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒（低频检查）
 const IDLE_SHRINK_THRESHOLD: usize = 5; // 空闲收缩阈值：连续5次检查池满则收缩
 const EXPANSION_MISS_THRESHOLD: f64 = 0.3; // 扩张阈值：miss率超过30%则考虑扩张

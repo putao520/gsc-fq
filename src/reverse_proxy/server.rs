@@ -60,6 +60,25 @@ impl ReverseProxyServer {
         }
     }
     
+    /// Open yamux stream with retry logic
+    async fn open_yamux_stream_with_retry(
+        control: &mut yamux::Control,
+        max_retries: usize,
+    ) -> std::result::Result<yamux::Stream, yamux::ConnectionError> {
+        let mut retries = max_retries;
+        loop {
+            match control.open_stream().await {
+                Ok(stream) => return Ok(stream),
+                Err(e) if retries > 0 => {
+                    retries -= 1;
+                    debug_println!("Failed to open yamux stream, {} retries left", retries);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    
     /// Handle client connection
     async fn handle_client(
         mut stream: TcpStream,
@@ -160,12 +179,13 @@ impl ReverseProxyServer {
                         Ok((mut user_stream, user_addr)) => {
                             debug_println!("New connection from {} to port {}", user_addr, server_port);
                             
-                            // Open a new yamux stream
-                            let yamux_stream = match control.open_stream().await {
+                            // Open a new yamux stream with retry
+                            let yamux_stream = match Self::open_yamux_stream_with_retry(&mut control, 3).await {
                                 Ok(s) => s,
                                 Err(e) => {
-                                    error_println!("Failed to open yamux stream: {}", e);
-                                    break;
+                                    error_println!("Failed to open yamux stream after retries: {}", e);
+                                    // Don't break the loop - continue accepting connections
+                                    continue;
                                 }
                             };
                             

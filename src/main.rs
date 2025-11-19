@@ -150,7 +150,7 @@ async fn run_reverse_server(control_port: u16) -> Result<()> {
 /// Run reverse proxy client mode
 async fn run_reverse_client(server_addr: SocketAddr) -> Result<()> {
     // Load configuration
-    let config_path = "config_test.toml";
+    let config_path = "default.toml";
     let config = match ConfigLoader::load_from_file(config_path) {
         Ok(config) => config,
         Err(AppError::Config(ConfigError::ConfigFileNotFound(_))) => {

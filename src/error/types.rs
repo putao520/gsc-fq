@@ -201,6 +201,9 @@ pub enum ReverseProxyError {
 
     #[error("Connection multiplexing error: {0}")]
     MultiplexingError(String),
+    
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
 
     #[error("Unsupported protocol version: {0}")]
     UnsupportedVersion(u8),
