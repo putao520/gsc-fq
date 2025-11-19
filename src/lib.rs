@@ -14,5 +14,5 @@ pub mod reverse_proxy;
 pub mod utils;
 
 // 重新导出主要类型和函数
-pub use config::{ConfigFile, ConfigLoader, ProxySection, ServerSection};
+pub use config::{ConfigFile, ConfigLoader, ProxySection, ReverseProxySection, ServerSection};
 pub use error::{AppError, ConfigError, NetworkError, ProxyError, Result};
