@@ -1,6 +1,6 @@
 use crate::config::loader::{ConfigLoader, ProxySection};
 use crate::error::{NetworkError, Result};
-use crate::proxy::StealthConnectionHandler;
+use crate::proxy::{ConnectionPool, StealthConnectionHandler};
 use crate::{debug_println, error_println};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
@@ -39,6 +39,7 @@ impl ProxyServer {
             None
         };
 
+        // 连接池始终启用（使用内置安全策略）
         let instance = ProxyInstance::new(
             self.bind_ip,
             proxy_config.local_port,
@@ -237,6 +238,7 @@ pub struct ProxyInstance {
     remote_addr: SocketAddr,
     source_ip: Option<IpAddr>,
     connection_handler: Arc<StealthConnectionHandler>,
+    connection_pool: Option<Arc<ConnectionPool>>,
     running: bool,
 }
 
@@ -250,6 +252,7 @@ impl ProxyInstance {
             source_ip: original.source_ip,
             // Share the existing connection handler so remote metadata remains intact.
             connection_handler: Arc::clone(&original.connection_handler),
+            connection_pool: original.connection_pool.clone(),
             running: false,
         }
     }
@@ -263,15 +266,23 @@ impl ProxyInstance {
     ) -> Result<Self> {
         let bind_addr = SocketAddr::new(bind_ip, local_port);
 
+        // 始终启用连接池（使用内置安全策略）
+        let pool = ConnectionPool::new(remote_addr, source_ip);
+        let connection_pool = Some(Arc::new(pool));
+
         // Create stealth connection handler with blackhole capabilities
-        let connection_handler =
-            Arc::new(StealthConnectionHandler::new(remote_addr, source_ip, None));
+        let connection_handler = Arc::new(StealthConnectionHandler::new(
+            remote_addr,
+            source_ip,
+            connection_pool.clone(),
+        ));
 
         Ok(Self {
             bind_addr,
             remote_addr,
             source_ip,
             connection_handler,
+            connection_pool,
             running: false,
         })
     }
@@ -279,6 +290,22 @@ impl ProxyInstance {
     /// Start the proxy instance
     pub async fn start(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<()> {
         self.running = true;
+
+        // Start connection pool if enabled
+        if let Some(pool) = &self.connection_pool {
+            debug_println!(
+                "Starting connection pool for {}:{} (size: {})",
+                self.bind_addr,
+                pool.get_stats().total_created,
+                ""
+            );
+            pool.start().await?;
+            let stats = pool.get_stats();
+            debug_println!(
+                "Connection pool preheated: {} connections created",
+                stats.total_created
+            );
+        }
 
         // Create optimized TCP listener
         let listener = self.create_optimized_listener().await?;
