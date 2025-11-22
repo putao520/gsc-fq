@@ -1,14 +1,5 @@
-use crate::error::{Result, SystemError};
-use std::fs;
-use std::path::Path;
+use crate::error::Result;
 
-/// Read a value from sysfs file
-fn read_sysfs_value(path: &str) -> Result<String> {
-    Ok(fs::read_to_string(path)
-        .map_err(|e| SystemError::SystemCallFailed(format!("Failed to read {}: {}", path, e)))?
-        .trim()
-        .to_string())
-}
 
 /// Check system requirements for optimal performance
 pub fn check_system_requirements() -> Result<()> {

@@ -1,45 +1,74 @@
-use crate::config::loader::{ConfigFile, ReverseProxySection};
+use crate::config::loader::ConfigFile;
 use crate::error::{ReverseProxyError, Result};
 use crate::reverse_proxy::protocol::*;
 use crate::reverse_proxy::yamux_pool::{YamuxConnectionPool, ConnectionSelectionStrategy, DEFAULT_POOL_SIZE};
 use crate::{debug_println, error_println};
-use futures::StreamExt;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use tokio::io::{copy_bidirectional, AsyncReadExt};
 use tokio::net::TcpStream;
-use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use yamux::{Config, Connection, Mode};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 /// Reverse proxy client
 pub struct ReverseProxyClient {
     server_addr: SocketAddr,
     config: ConfigFile,
-    
+
     /// Yamux连接池
     yamux_pool: Option<YamuxConnectionPool>,
-    
+
     /// 连接池大小（默认32）
     yamux_pool_size: usize,
-    
+
     /// 负载均衡策略
     selection_strategy: ConnectionSelectionStrategy,
+
+    /// 认证TOKEN
+    auth_token: Option<String>,
 }
 
 impl ReverseProxyClient {
     /// Create new reverse proxy client
     pub fn new(server_addr: SocketAddr, config: ConfigFile) -> Self {
+        // 从环境变量读取auth_token
+        let auth_token = std::env::var("REVERSE_PROXY_TOKEN")
+            .ok()
+            .or_else(|| {
+                // 从配置文件读取token（如果指定）
+                config.server.as_ref()
+                    .and_then(|s| s.auth_token.clone())
+            });
+
         // 从环境变量或配置读取pool_size，默认32
         let yamux_pool_size = std::env::var("YAMUX_POOL_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_POOL_SIZE);
-        
+
         Self {
             server_addr,
             config,
             yamux_pool: None,
             yamux_pool_size,
             selection_strategy: ConnectionSelectionStrategy::RoundRobin,
+            auth_token,
+        }
+    }
+
+    /// Create new reverse proxy client with custom auth token
+    pub fn new_with_token(server_addr: SocketAddr, config: ConfigFile, auth_token: String) -> Self {
+        // 从环境变量或配置读取pool_size，默认32
+        let yamux_pool_size = std::env::var("YAMUX_POOL_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_POOL_SIZE);
+
+        Self {
+            server_addr,
+            config,
+            yamux_pool: None,
+            yamux_pool_size,
+            selection_strategy: ConnectionSelectionStrategy::RoundRobin,
+            auth_token: Some(auth_token),
         }
     }
     
@@ -49,8 +78,7 @@ impl ReverseProxyClient {
         let mut backoff_seconds = 1u64;
         const MIN_BACKOFF: u64 = 1;
         const MAX_BACKOFF: u64 = 60;
-        const CONNECTION_TIMEOUT: u64 = 30;
-        
+              
         loop {
             match self.try_connect_and_run().await {
                 Ok(_) => {
@@ -107,6 +135,7 @@ impl ReverseProxyClient {
             &proxy_configs,
             self.yamux_pool_size,
             self.selection_strategy,
+            &self.auth_token,
         ).await?;
         
         // Display active reverse proxies

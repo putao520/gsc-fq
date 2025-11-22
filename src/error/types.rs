@@ -207,6 +207,9 @@ pub enum ReverseProxyError {
 
     #[error("Unsupported protocol version: {0}")]
     UnsupportedVersion(u8),
+
+    #[error("Cryptography error: {0}")]
+    CryptoError(String),
 }
 
 impl AppError {

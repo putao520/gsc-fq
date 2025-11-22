@@ -150,26 +150,23 @@ mod tests {
     use crate::proxy::connection_metrics::ConnectionMetrics;
     use std::time::Duration;
     
-    fn create_test_connection_with_score(score: u8) -> QualityAwareConnection {
+    async fn create_test_connection_with_score(score: u8) -> QualityAwareConnection {
         use tokio::net::TcpListener;
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        
+
         // 创建一个测试连接
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let stream = rt.block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
-            
-            tokio::spawn(async move {
-                listener.accept().await.unwrap();
-            });
-            
-            tokio::net::TcpStream::connect(addr).await.unwrap()
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
         });
-        
+
+        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+
         let mut metrics = ConnectionMetrics::new();
-        
+
         // 根据目标分数设置指标
         if score >= 90 {
             metrics.add_rtt_sample(Duration::from_millis(30));
@@ -187,12 +184,8 @@ mod tests {
             metrics.failure_count = 80;
             metrics.bandwidth_mbps = 0.5;
         }
-        
-        QualityAwareConnection {
-            stream,
-            metrics: Arc::new(Mutex::new(metrics)),
-            connection_id: uuid::Uuid::new_v4().to_string(),
-        }
+
+        QualityAwareConnection::new_with_metrics(stream, Arc::new(Mutex::new(metrics)), uuid::Uuid::new_v4().to_string())
     }
     
     #[test]
@@ -206,9 +199,9 @@ mod tests {
     #[tokio::test]
     async fn test_select_best_quality() {
         let mut pool = vec![
-            create_test_connection_with_score(50),
-            create_test_connection_with_score(90),
-            create_test_connection_with_score(70),
+            create_test_connection_with_score(50).await,
+            create_test_connection_with_score(90).await,
+            create_test_connection_with_score(70).await,
         ];
         
         let selected = ConnectionSelector::select_best_quality(&mut pool).await.unwrap();
@@ -222,9 +215,9 @@ mod tests {
     #[tokio::test]
     async fn test_select_round_robin() {
         let mut pool = vec![
-            create_test_connection_with_score(50),
-            create_test_connection_with_score(60),
-            create_test_connection_with_score(70),
+            create_test_connection_with_score(50).await,
+            create_test_connection_with_score(60).await,
+            create_test_connection_with_score(70).await,
         ];
         
         let mut index = 0;

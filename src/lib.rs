@@ -8,6 +8,7 @@
 //! - 智能内存和连接池管理
 
 pub mod config;
+pub mod crypto;
 pub mod error;
 pub mod proxy;
 pub mod reverse_proxy;

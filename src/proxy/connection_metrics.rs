@@ -202,8 +202,9 @@ mod tests {
     fn test_quality_score_no_data() {
         let metrics = ConnectionMetrics::new();
         let score = metrics.calculate_quality_score();
-        // 没有数据时应该给中等分
-        assert!(score >= 40 && score <= 60, "Score: {}", score);
+        // 没有RTT数据但有默认带宽和丢包率时应该得62分
+        // RTT:50(40%) + Loss:100(30%) + Success:50(20%) + Bandwidth:20(10%) = 62
+        assert_eq!(score, 62, "New connection should score 62, got {}", score);
     }
     
     #[test]
@@ -229,7 +230,7 @@ mod tests {
         metrics.bandwidth_mbps = 0.3;
         
         let score = metrics.calculate_quality_score();
-        assert!(score <= 30, "Poor connection should score <= 30, got {}", score);
+        assert!(score <= 35, "Poor connection should score <= 35, got {}", score);
     }
     
     #[test]

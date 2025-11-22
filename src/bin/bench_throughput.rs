@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use std::time::{Instant, Duration};
@@ -32,7 +31,7 @@ async fn run_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
             let mut buf = vec![0u8; 64 * 1024]; // 64KB buffer
             let total_bytes = Arc::new(AtomicUsize::new(0));
             let total_bytes_clone = total_bytes.clone();
-            let start_time = Instant::now();
+            let _start_time = Instant::now();
 
             // Stats printer
             tokio::spawn(async move {

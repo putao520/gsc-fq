@@ -175,6 +175,30 @@ pub async fn wait_for_port_ready(port: u16, timeout: Duration) -> io::Result<()>
 }
 
 pub fn pick_available_port() -> Result<u16> {
+    // Try multiple times to get a truly available port
+    for _ in 0..3 {
+        let listener =
+            std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("failed to allocate port")?;
+        let port = listener
+            .local_addr()
+            .context("failed to read allocated port")?
+            .port();
+        drop(listener);
+
+        // Quick check to see if port is still available
+        match std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+            Ok(_) => {
+                // Port is available, use it
+                return Ok(port);
+            }
+            Err(_) => {
+                // Port was taken, try again
+                continue;
+            }
+        }
+    }
+
+    // Fallback to original behavior
     let listener =
         std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("failed to allocate port")?;
     let port = listener
@@ -328,6 +352,8 @@ impl ReverseProxyClientHandle {
             server: Some(ServerSection {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(false),
+                auth_token: None,
+                allowed_tokens: Vec::new(),
             }),
             proxies: Vec::new(),
             reverse_proxies,

@@ -17,7 +17,14 @@ const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒（低频检�
 const IDLE_SHRINK_THRESHOLD: usize = 5; // 空闲收缩阈值：连续5次检查池满则收缩
 const EXPANSION_MISS_THRESHOLD: f64 = 0.3; // 扩张阈值：miss率超过30%则考虑扩张
 const BLACKHOLE_FAILURE_THRESHOLD: u32 = 3; // 黑洞服务器检测阈值：连续3次连接失败
-const BLACKHOLE_DETECTION_TIMEOUT_SECS: u64 = 30; // 黑洞检测超时：30秒
+
+// 运行时可配置的黑洞检测阈值
+fn get_blackhole_failure_threshold() -> u32 {
+    std::env::var("BLACKHOLE_FAILURE_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(BLACKHOLE_FAILURE_THRESHOLD)
+}
 
 /// 连接池统计信息
 #[derive(Debug, Default)]
@@ -135,10 +142,11 @@ impl ConnectionPool {
 
                     eprintln!("⚠️  Failed to preheat connection {}/{}: {}", i + 1, initial_size, e);
 
-                    // 黑洞检测：连续3次失败则标记为黑洞服务器
-                    if consecutive_failures >= BLACKHOLE_FAILURE_THRESHOLD {
+                    // 黑洞检测：连续N次失败则标记为黑洞服务器
+                    let threshold = get_blackhole_failure_threshold();
+                    if consecutive_failures >= threshold {
                         self.stats.is_blackhole.store(true, Ordering::Relaxed);
-                        eprintln!("🕳️  Blackhole server detected: {} consecutive failures", consecutive_failures);
+                        eprintln!("🕳️  Blackhole server detected: {} consecutive failures (threshold: {})", consecutive_failures, threshold);
                         eprintln!("⏹️  Stopping preheat for blackhole server");
                         break;
                     }
@@ -199,9 +207,10 @@ impl ConnectionPool {
                 let consecutive_failures = self.stats.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
 
                 // 检查是否达到黑洞阈值
-                if consecutive_failures >= BLACKHOLE_FAILURE_THRESHOLD as u64 {
+                let threshold = get_blackhole_failure_threshold() as u64;
+                if consecutive_failures >= threshold {
                     self.stats.is_blackhole.store(true, Ordering::Relaxed);
-                    eprintln!("🕳️  Server marked as blackhole: {} consecutive failures", consecutive_failures);
+                    eprintln!("🕳️  Server marked as blackhole: {} consecutive failures (threshold: {})", consecutive_failures, threshold);
                 }
 
                 Err(e)

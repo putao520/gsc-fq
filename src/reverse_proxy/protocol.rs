@@ -11,22 +11,26 @@ const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
 /// Control channel message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMessage {
-    /// Client → Server: Handshake + configuration
+    /// Client → Server: Handshake + configuration + TOKEN
     ClientHello {
         version: u8,
+        token: String,
         proxies: Vec<ReverseProxyConfig>,
+        config_hash: String, // SHA256 hash of client config for verification
     },
-    
+
     /// Server → Client: Handshake response
     ServerHello {
         version: u8,
         status: HandshakeStatus,
         message: String,
+        allowed_ports: Vec<u16>, // Allowed ports for this token
+        session_id: Option<String>, // Session identifier
     },
-    
+
     /// Server → Client: Heartbeat/ping
     Ping,
-    
+
     /// Client → Server: Heartbeat/pong
     Pong,
 }
@@ -46,6 +50,10 @@ pub enum HandshakeStatus {
     VersionMismatch,
     ConfigError,
     PortAllocationFailed,
+    InvalidToken,
+    TokenExpired,
+    AccessDenied,
+    InvalidConfigHash,
 }
 
 impl ControlMessage {
@@ -111,21 +119,25 @@ mod tests {
     fn test_message_serialization() {
         let msg = ControlMessage::ClientHello {
             version: PROTOCOL_VERSION,
+            token: "test-token".to_string(),
             proxies: vec![ReverseProxyConfig {
                 server_port: 8080,
                 local_host: "localhost".to_string(),
                 local_port: 80,
             }],
+            config_hash: "abc123".to_string(),
         };
-        
+
         let bytes = msg.to_bytes().unwrap();
         let decoded = ControlMessage::from_bytes(&bytes).unwrap();
-        
+
         match decoded {
-            ControlMessage::ClientHello { version, proxies } => {
+            ControlMessage::ClientHello { version, proxies, token, config_hash } => {
                 assert_eq!(version, PROTOCOL_VERSION);
                 assert_eq!(proxies.len(), 1);
                 assert_eq!(proxies[0].server_port, 8080);
+                assert_eq!(token, "test-token");
+                assert_eq!(config_hash, "abc123");
             }
             _ => panic!("Unexpected message type"),
         }

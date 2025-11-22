@@ -20,6 +20,47 @@ pub struct ConfigFile {
 pub struct ServerSection {
     pub bind_ip: Option<String>,
     pub debug: Option<bool>,
+    pub auth_token: Option<String>,        // Authentication token required for clients
+    pub allowed_tokens: Vec<String>,        // List of allowed tokens
+}
+
+impl ServerSection {
+    /// Check if a token is valid
+    pub fn is_token_valid(&self, token: &str) -> bool {
+        // If no auth_token is specified, allow any token (development mode)
+        if self.auth_token.is_none() && self.allowed_tokens.is_empty() {
+            return true;
+        }
+
+        // Check against specific token
+        if let Some(ref required_token) = self.auth_token {
+            if token == required_token {
+                return true;
+            }
+        }
+
+        // Check against allowed tokens list
+        self.allowed_tokens.contains(&token.to_string())
+    }
+
+    /// Get authentication mode
+    pub fn auth_mode(&self) -> AuthMode {
+        if self.auth_token.is_some() {
+            AuthMode::Single
+        } else if !self.allowed_tokens.is_empty() {
+            AuthMode::Multiple
+        } else {
+            AuthMode::None
+        }
+    }
+}
+
+/// Authentication mode for server
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    None,       // No authentication required
+    Single,     // Single token validation
+    Multiple,   // Multiple allowed tokens
 }
 
 impl Default for ServerSection {
@@ -27,6 +68,8 @@ impl Default for ServerSection {
         Self {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(false),
+            auth_token: None,
+            allowed_tokens: Vec::new(),
         }
     }
 }
@@ -455,6 +498,7 @@ mod tests {
                 remote_port: 80,
                 source_ip: Some("invalid-ip".to_string()),
             }],
+            reverse_proxies: vec![],
         };
 
         let result = config.validate();
@@ -540,6 +584,7 @@ remote_host = "example.com"
                     source_ip: None,
                 },
             ],
+            reverse_proxies: vec![],
         };
 
         let result = config.validate();
@@ -582,6 +627,7 @@ source_ip = null
     fn test_server_bind_ip_empty_defaults() {
         let content = r#"[server]
 bind_ip = ""
+allowed_tokens = []
 
 [[proxies]]
 local_port = 8200
@@ -616,6 +662,7 @@ remote_port = 8201
     fn test_load_from_str() {
         let toml_content = r#"[server]
 bind_ip = " 127.0.0.1 "
+allowed_tokens = []
 
 [[proxies]]
 local_port = 8080

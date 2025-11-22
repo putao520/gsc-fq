@@ -1,12 +1,13 @@
 use crate::error::Result;
 use crate::reverse_proxy::protocol::{ControlMessage, HandshakeStatus, ReverseProxyConfig};
 use futures::StreamExt;
+use sha2::Digest;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Mutex;
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use yamux::{Config, Connection, Mode};
 
 /// Yamux连接池大小配置
@@ -85,6 +86,7 @@ impl YamuxConnectionPool {
         config: &[ReverseProxyConfig],
         pool_size: usize,
         strategy: ConnectionSelectionStrategy,
+        auth_token: &Option<String>,
     ) -> Result<Self> {
         println!("🔄 创建Yamux连接池: {} 个连接...", pool_size);
         
@@ -95,9 +97,10 @@ impl YamuxConnectionPool {
         for id in 0..pool_size {
             let addr = server_addr;
             let cfg = config.to_vec();
-            
+            let token = auth_token.clone();
+
             tasks.push(tokio::spawn(async move {
-                Self::create_yamux_connection(addr, &cfg, id).await
+                Self::create_yamux_connection(addr, &cfg, id, &token).await
             }));
         }
         
@@ -142,12 +145,13 @@ impl YamuxConnectionPool {
         server_addr: SocketAddr,
         config: &[ReverseProxyConfig],
         id: usize,
+        auth_token: &Option<String>,
     ) -> Result<YamuxConnection> {
         // 1. 创建优化的TCP连接
         let mut stream = Self::create_optimized_tcp(server_addr).await?;
         
         // 2. 执行握手
-        Self::do_handshake(&mut stream, config).await?;
+        Self::do_handshake(&mut stream, config, auth_token).await?;
         
         // 3. 升级到Yamux
         let compat_stream = stream.compat();
@@ -216,17 +220,28 @@ impl YamuxConnectionPool {
     async fn do_handshake(
         stream: &mut TcpStream,
         config: &[ReverseProxyConfig],
+        auth_token: &Option<String>,
     ) -> Result<()> {
+        // 计算配置哈希
+        let config_json = serde_json::to_string(config)
+            .map_err(|e| crate::error::ReverseProxyError::SerializationFailed(e.to_string()))?;
+        let config_hash = format!("{:x}", sha2::Sha256::digest(config_json.as_bytes()));
+
+        // 获取认证令牌
+        let token = auth_token.clone().unwrap_or_default();
+
         // 发送ClientHello
         let hello = ControlMessage::ClientHello {
             version: 1,
+            token,
             proxies: config.to_vec(),
+            config_hash,
         };
         hello.write_to(stream).await?;
-        
+
         // 接收ServerHello
         let response = ControlMessage::read_from(stream).await?;
-        
+
         match response {
             ControlMessage::ServerHello { status, message, .. } => {
                 match status {

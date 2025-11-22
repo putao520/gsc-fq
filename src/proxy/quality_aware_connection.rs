@@ -24,6 +24,15 @@ impl QualityAwareConnection {
             connection_id: uuid::Uuid::new_v4().to_string(),
         }
     }
+
+    /// 使用指定指标创建新连接（测试用）
+    pub fn new_with_metrics(stream: TcpStream, metrics: Arc<Mutex<ConnectionMetrics>>, connection_id: String) -> Self {
+        Self {
+            stream,
+            metrics,
+            connection_id,
+        }
+    }
     
     /// 获取连接质量评分
     pub async fn quality_score(&self) -> u8 {

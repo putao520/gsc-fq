@@ -2,14 +2,15 @@ use crate::error::{ReverseProxyError, Result};
 use crate::reverse_proxy::protocol::*;
 use crate::{debug_println, error_println};
 use futures::StreamExt;
+use sha2::Digest;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{copy_bidirectional, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use yamux::{Config, Connection, Mode};
 
 type ClientId = String;
@@ -18,6 +19,8 @@ type ClientId = String;
 pub struct ReverseProxyServer {
     control_addr: SocketAddr,
     clients: Arc<Mutex<HashMap<ClientId, ClientSession>>>,
+    auth_token: Option<String>,
+    allowed_tokens: Vec<String>,
 }
 
 /// Client session information
@@ -33,6 +36,24 @@ impl ReverseProxyServer {
         Self {
             control_addr,
             clients: Arc::new(Mutex::new(HashMap::new())),
+            auth_token: std::env::var("REVERSE_PROXY_TOKEN").ok(),
+            allowed_tokens: Vec::new(),
+        }
+    }
+
+    /// Create new reverse proxy server with authentication
+    pub fn new_with_auth(
+        bind_ip: std::net::IpAddr,
+        control_port: u16,
+        auth_token: Option<String>,
+        allowed_tokens: Vec<String>
+    ) -> Self {
+        let control_addr = SocketAddr::new(bind_ip, control_port);
+        Self {
+            control_addr,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            auth_token,
+            allowed_tokens,
         }
     }
     
@@ -47,8 +68,10 @@ impl ReverseProxyServer {
                     debug_println!("New control connection from {}", addr);
                     let clients = self.clients.clone();
                     
+                    let auth_token = self.auth_token.clone();
+                    let allowed_tokens = self.allowed_tokens.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(stream, addr, clients).await {
+                        if let Err(e) = Self::handle_client(stream, addr, clients, auth_token, allowed_tokens).await {
                             error_println!("Client {} error: {}", addr, e);
                         }
                     });
@@ -69,7 +92,7 @@ impl ReverseProxyServer {
         loop {
             match control.open_stream().await {
                 Ok(stream) => return Ok(stream),
-                Err(e) if retries > 0 => {
+                Err(_) if retries > 0 => {
                     retries -= 1;
                     debug_println!("Failed to open yamux stream, {} retries left", retries);
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -84,12 +107,16 @@ impl ReverseProxyServer {
         mut stream: TcpStream,
         addr: SocketAddr,
         clients: Arc<Mutex<HashMap<ClientId, ClientSession>>>,
+        auth_token: Option<String>,
+        allowed_tokens: Vec<String>,
     ) -> Result<()> {
         // Read ClientHello
         let msg = ControlMessage::read_from(&mut stream).await?;
-        
-        let (version, proxy_configs) = match msg {
-            ControlMessage::ClientHello { version, proxies } => (version, proxies),
+
+        let (version, token, proxy_configs, config_hash) = match msg {
+            ControlMessage::ClientHello { version, token, proxies, config_hash } => {
+                (version, token, proxies, config_hash)
+            },
             _ => {
                 return Err(ReverseProxyError::ProtocolError(
                     "Expected ClientHello".to_string()
@@ -103,9 +130,52 @@ impl ReverseProxyServer {
                 version: PROTOCOL_VERSION,
                 status: HandshakeStatus::VersionMismatch,
                 message: format!("Unsupported version: {}", version),
+                allowed_ports: Vec::new(),
+                session_id: None,
             };
             response.write_to(&mut stream).await?;
             return Err(ReverseProxyError::UnsupportedVersion(version).into());
+        }
+
+        // Validate authentication token
+        let token_valid = match &auth_token {
+            Some(server_token) => {
+                // Check if client token matches server token
+                token == *server_token || allowed_tokens.contains(&token)
+            },
+            None => {
+                // No authentication required on server
+                true
+            }
+        };
+
+        if !token_valid {
+            let response = ControlMessage::ServerHello {
+                version: PROTOCOL_VERSION,
+                status: HandshakeStatus::InvalidToken,
+                message: "Invalid or missing authentication token".to_string(),
+                allowed_ports: Vec::new(),
+                session_id: None,
+            };
+            response.write_to(&mut stream).await?;
+            return Err(ReverseProxyError::HandshakeFailed("Authentication failed".to_string()).into());
+        }
+
+        // Verify configuration hash for tamper protection
+        let expected_config_json = serde_json::to_string(&proxy_configs)
+            .map_err(|e| ReverseProxyError::SerializationFailed(e.to_string()))?;
+        let expected_hash = format!("{:x}", sha2::Sha256::digest(expected_config_json.as_bytes()));
+
+        if expected_hash != config_hash {
+            let response = ControlMessage::ServerHello {
+                version: PROTOCOL_VERSION,
+                status: HandshakeStatus::InvalidConfigHash,
+                message: "Configuration hash mismatch - possible tampering detected".to_string(),
+                allowed_ports: Vec::new(),
+                session_id: None,
+            };
+            response.write_to(&mut stream).await?;
+            return Err(ReverseProxyError::HandshakeFailed("Configuration integrity check failed".to_string()).into());
         }
         
         // Validate configurations
@@ -114,6 +184,8 @@ impl ReverseProxyServer {
                 version: PROTOCOL_VERSION,
                 status: HandshakeStatus::ConfigError,
                 message: "No proxy configurations provided".to_string(),
+                allowed_ports: Vec::new(),
+                session_id: None,
             };
             response.write_to(&mut stream).await?;
             return Err(ReverseProxyError::HandshakeFailed("No proxies".to_string()).into());
@@ -141,6 +213,8 @@ impl ReverseProxyServer {
                         version: PROTOCOL_VERSION,
                         status: HandshakeStatus::PortAllocationFailed,
                         message: format!("Failed to bind port {}: {}", server_port, e),
+                        allowed_ports: Vec::new(),
+                        session_id: None,
                     };
                     response.write_to(&mut stream).await?;
                     return Err(ReverseProxyError::PortAllocationFailed(e.to_string()).into());
@@ -148,11 +222,23 @@ impl ReverseProxyServer {
             }
         }
         
+        // Generate session ID and collect allowed ports
+        let session_id = Some(format!("session_{}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            addr
+        ));
+        let allowed_ports: Vec<u16> = proxy_configs.iter().map(|c| c.server_port).collect();
+
         // Send success response
         let response = ControlMessage::ServerHello {
             version: PROTOCOL_VERSION,
             status: HandshakeStatus::Ok,
             message: format!("Connected, {} ports allocated", proxy_configs.len()),
+            allowed_ports,
+            session_id: session_id.clone(),
         };
         response.write_to(&mut stream).await?;
         
@@ -163,7 +249,7 @@ impl ReverseProxyServer {
         let compat_stream = stream.compat();
         let config = Config::default();
         let conn = Connection::new(compat_stream, config, Mode::Server);
-        let mut yamux_control = conn.control();
+        let yamux_control = conn.control();
         
         // Spawn task to drive the yamux connection
         tokio::spawn(yamux::into_stream(conn).for_each(|_| async {}));
