@@ -1,10 +1,13 @@
 use crate::error::Result;
 use crate::reverse_proxy::protocol::{ControlMessage, HandshakeStatus, ReverseProxyConfig};
+use crate::{debug_println, error_println};
 use futures::StreamExt;
 use sha2::Digest;
+use std::marker::Unpin;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Mutex;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -34,13 +37,13 @@ impl Default for ConnectionSelectionStrategy {
 pub struct YamuxConnection {
     /// Yamux控制器
     control: yamux::Control,
-    
+
     /// 连接ID
     pub id: usize,
-    
+
     /// 连接状态（true = 活跃）
     state: Arc<AtomicBool>,
-    
+
     /// 流计数
     stream_count: Arc<AtomicUsize>,
 }
@@ -52,12 +55,12 @@ impl YamuxConnection {
         self.stream_count.fetch_add(1, Ordering::Relaxed);
         Ok(stream)
     }
-    
+
     /// 获取流计数
     pub fn stream_count(&self) -> usize {
         self.stream_count.load(Ordering::Relaxed)
     }
-    
+
     /// 检查是否活跃
     pub fn is_active(&self) -> bool {
         self.state.load(Ordering::Relaxed)
@@ -163,15 +166,34 @@ impl YamuxConnectionPool {
         let state = Arc::new(AtomicBool::new(true));
         let state_clone = state.clone();
         
+        // Store proxy configs for the connection handler
+        let proxy_configs_for_handler = config.to_vec();
+
         tokio::spawn(async move {
-            // Yamux驱动循环
+            // Yamux驱动循环 - 处理incoming流
             let stream = yamux::into_stream(conn);
             tokio::pin!(stream);
-            
-            while let Some(_) = stream.next().await {
-                // 处理incoming流（如果需要）
+
+            while let Some(stream_result) = stream.next().await {
+                match stream_result {
+                    Ok(incoming_yamux_stream) => {
+                        debug_println!("📥 Client received incoming yamux stream from server");
+
+                        // Handle the incoming stream in a separate task
+                        let proxy_configs_clone = proxy_configs_for_handler.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = Self::handle_incoming_stream_from_pool(incoming_yamux_stream, proxy_configs_clone).await {
+                                error_println!("Failed to handle incoming stream: {}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        debug_println!("Yamux stream error: {}", e);
+                        break;
+                    }
+                }
             }
-            
+
             state_clone.store(false, Ordering::Relaxed);
         });
         
@@ -338,6 +360,79 @@ pub struct PoolStats {
     pub pool_size: usize,
     pub active_connections: usize,
     pub total_streams: usize,
+}
+
+impl YamuxConnectionPool {
+    /// 处理来自连接池的incoming流
+    async fn handle_incoming_stream_from_pool(
+        yamux_stream: yamux::Stream,
+        proxy_configs: Vec<ReverseProxyConfig>,
+    ) -> Result<()> {
+        use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+        let mut yamux_tokio = yamux_stream.compat();
+
+        // Read port header (first 2 bytes)
+        let mut port_bytes = [0u8; 2];
+        debug_println!("Reading port header from incoming stream...");
+
+        if let Err(e) = yamux_tokio.read_exact(&mut port_bytes).await {
+            error_println!("Failed to read port header: {}", e);
+            return Err(crate::error::ReverseProxyError::ConnectionFailed(
+                format!("Failed to read port header: {}", e)
+            ).into());
+        }
+
+        let server_port = u16::from_be_bytes(port_bytes);
+        debug_println!("Received incoming stream for server port {}", server_port);
+
+        // Find the corresponding local target
+        let local_target = proxy_configs.iter()
+            .find(|c| c.server_port == server_port)
+            .cloned();
+
+        let Some(target) = local_target else {
+            error_println!("Unknown server port: {}", server_port);
+            return Err(crate::error::ReverseProxyError::ConnectionFailed(
+                format!("Unknown server port: {}", server_port)
+            ).into());
+        };
+
+        // Handle the stream data forwarding
+        Self::handle_stream_forwarding(yamux_tokio, target).await
+    }
+
+    /// 处理流数据转发
+    async fn handle_stream_forwarding(
+        mut yamux_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+        target: ReverseProxyConfig,
+    ) -> Result<()> {
+        // Connect to local service
+        let local_addr = format!("{}:{}", target.local_host, target.local_port);
+        let mut local_stream = TcpStream::connect(&local_addr).await.map_err(|e| {
+            crate::error::ReverseProxyError::ConnectionFailed(format!(
+                "Failed to connect to local service {}: {}",
+                local_addr, e
+            ))
+        })?;
+
+        debug_println!("Connected to local service: {}", local_addr);
+
+        // Bidirectional copy
+        match tokio::io::copy_bidirectional(&mut yamux_stream, &mut local_stream).await {
+            Ok((from_yamux, to_yamux)) => {
+                debug_println!(
+                    "Stream closed. Transferred: {} bytes from server, {} bytes to server",
+                    from_yamux, to_yamux
+                );
+            }
+            Err(e) => {
+                debug_println!("Copy error: {}", e);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

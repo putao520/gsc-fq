@@ -25,9 +25,6 @@ macro_rules! debug_println {
     ($($arg:tt)*) => {
         if $crate::utils::debug::is_debug_enabled() {
             println!($($arg)*);
-            // 只在调试模式下刷新输出缓冲区
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
         }
     };
 }
@@ -37,8 +34,6 @@ macro_rules! debug_println {
 macro_rules! error_println {
     ($($arg:tt)*) => {
         eprintln!($($arg)*);
-        use std::io::Write;
-        let _ = std::io::stderr().flush();
     };
 }
 
@@ -48,8 +43,6 @@ macro_rules! debug_print {
     ($($arg:tt)*) => {
         if $crate::utils::debug::is_debug_enabled() {
             print!($($arg)*);
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
         }
     };
 }
