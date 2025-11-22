@@ -78,24 +78,35 @@ impl ReverseProxyClient {
         let mut backoff_seconds = 1u64;
         const MIN_BACKOFF: u64 = 1;
         const MAX_BACKOFF: u64 = 60;
-              
+        const MAX_RETRIES: u64 = 10;  // Limit retry attempts to prevent infinite loops
+
         loop {
+            // Check if we've exceeded maximum retry attempts
+            if retry_count >= MAX_RETRIES {
+                error_println!("Maximum retry attempts ({}) exceeded, giving up", MAX_RETRIES);
+                return Err(ReverseProxyError::ConnectionFailed(
+                    format!("Failed after {} retry attempts", MAX_RETRIES)
+                ).into());
+            }
+
             match self.try_connect_and_run().await {
                 Ok(_) => {
-                    // Connection ended gracefully, reset backoff and retry
-                    println!("⚠️  Connection ended, reconnecting...");
-                    retry_count = 0;
-                    backoff_seconds = MIN_BACKOFF;
+                    // Connection completed successfully, exit cleanly
+                    println!("✅ Connection completed successfully");
+                    return Ok(());
                 }
                 Err(e) => {
                     retry_count += 1;
                     error_println!("Connection failed (attempt {}): {}", retry_count, e);
-                    
-                    println!("🔄 Reconnecting in {} seconds...", backoff_seconds);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff_seconds)).await;
-                    
-                    // Exponential backoff with max limit
-                    backoff_seconds = (backoff_seconds * 2).min(MAX_BACKOFF);
+
+                    if retry_count < MAX_RETRIES {
+                        println!("🔄 Reconnecting in {} seconds... (attempt {}/{})",
+                            backoff_seconds, retry_count, MAX_RETRIES);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(backoff_seconds)).await;
+
+                        // Exponential backoff with max limit
+                        backoff_seconds = (backoff_seconds * 2).min(MAX_BACKOFF);
+                    }
                 }
             }
         }
@@ -163,57 +174,69 @@ impl ReverseProxyClient {
     
     
     /// Run a single session (separated for cleaner code)
-    async fn run_session(&mut self, proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
-        let pool = self.yamux_pool.as_ref()
-            .ok_or_else(|| ReverseProxyError::ConnectionFailed("Yamux pool not initialized".to_string()))?;
-        
-        // Main loop: continuously accept server requests via yamux streams
+    async fn run_session(&mut self, _proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
+        println!("✅ Client connected and waiting for data forwarding through reverse proxy");
+
+        // The yamux pool is already handling incoming streams in its background tasks
+        // We just need to keep the main client connection alive
+        // When the server opens streams to forward external connections,
+        // the pool's background tasks will handle them automatically
+
         loop {
-            // Acquire a connection from pool and open a stream
-            let conn = pool.acquire().await?;
-            let mut conn_guard = conn.lock().await;
-            
-            let yamux_stream = match conn_guard.open_stream().await {
-                Ok(s) => s,
-                Err(e) => {
-                    error_println!("Failed to open yamux stream: {}", e);
-                    // Connection might be dead, continue to try next
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    continue;
-                }
-            };
-            
-            drop(conn_guard); // Release lock
-            
-            let mut yamux_tokio = yamux_stream.compat();
-            
-            // Read port header (first 2 bytes)
-            let mut port_bytes = [0u8; 2];
-            if let Err(e) = yamux_tokio.read_exact(&mut port_bytes).await {
-                error_println!("Failed to read port header: {}", e);
-                continue;
+            // Keep the client alive and check connection health
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+            // Check if the pool is still active
+            let pool = self.yamux_pool.as_ref()
+                .ok_or_else(|| ReverseProxyError::ConnectionFailed("Yamux pool not initialized".to_string()))?;
+
+            let stats = pool.get_stats().await;
+            debug_println!("Connection pool status: {} active connections", stats.active_connections);
+
+            if stats.active_connections == 0 {
+                return Err(ReverseProxyError::ConnectionFailed(
+                    "All yamux connections have been lost".to_string()
+                ).into());
             }
-            
-            let server_port = u16::from_be_bytes(port_bytes);
-            debug_println!("New stream for port {}", server_port);
-            
-            // Find the corresponding local target
-            let local_target = proxy_configs.iter()
-                .find(|c| c.server_port == server_port)
-                .cloned();
-            
-            let Some(target) = local_target else {
-                error_println!("Unknown server port: {}", server_port);
-                continue;
-            };
-            
-            // Spawn task to handle this stream
-            tokio::spawn(async move {
-                if let Err(e) = Self::handle_stream(yamux_tokio, target).await {
-                    error_println!("Stream handling error: {}", e);
-                }
-            });
         }
+    }
+
+    
+    /// Handle an incoming yamux stream from the server
+    async fn handle_incoming_stream(
+        yamux_stream: yamux::Stream,
+        proxy_configs: Vec<ReverseProxyConfig>,
+    ) -> Result<()> {
+        let mut yamux_tokio = yamux_stream.compat();
+
+        // Read port header (first 2 bytes)
+        let mut port_bytes = [0u8; 2];
+        debug_println!("Reading port header from incoming stream...");
+
+        if let Err(e) = yamux_tokio.read_exact(&mut port_bytes).await {
+            error_println!("Failed to read port header: {}", e);
+            return Err(ReverseProxyError::ConnectionFailed(
+                format!("Failed to read port header: {}", e)
+            ).into());
+        }
+
+        let server_port = u16::from_be_bytes(port_bytes);
+        debug_println!("Received incoming stream for server port {}", server_port);
+
+        // Find the corresponding local target
+        let local_target = proxy_configs.iter()
+            .find(|c| c.server_port == server_port)
+            .cloned();
+
+        let Some(target) = local_target else {
+            error_println!("Unknown server port: {}", server_port);
+            return Err(ReverseProxyError::ConnectionFailed(
+                format!("Unknown server port: {}", server_port)
+            ).into());
+        };
+
+        // Handle the stream data forwarding
+        Self::handle_stream(yamux_tokio, target).await
     }
     
     /// Handle a single yamux stream

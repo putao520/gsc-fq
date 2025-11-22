@@ -6,7 +6,7 @@ use sha2::Digest;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_bidirectional, AsyncWriteExt};
+use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -197,16 +197,23 @@ impl ReverseProxyServer {
         
         for config in &proxy_configs {
             let server_port = config.server_port;
+            // For now, use server_port for binding (could be enhanced to use dynamic port allocation)
+            let actual_local_port = server_port;
             let bind_addr = SocketAddr::new(
                 stream.local_addr()?.ip(),
-                server_port
+                actual_local_port
             );
-            
+
+            debug_println!("Attempting to bind port {} (client requested: {})",
+                actual_local_port, server_port);
+
             match TcpListener::bind(bind_addr).await {
                 Ok(listener) => {
-                    debug_println!("Opened port {} for reverse proxy", server_port);
+                    debug_println!("Opened port {} for reverse proxy (target: {}:{})",
+                        actual_local_port, config.local_host.clone(), config.local_port);
                     port_to_target.insert(server_port, (config.local_host.clone(), config.local_port));
-                    listeners.push((listener, server_port));
+                    // Store the actual bound port for client reference
+                    listeners.push((listener, actual_local_port));
                 }
                 Err(e) => {
                     let response = ControlMessage::ServerHello {
@@ -251,8 +258,53 @@ impl ReverseProxyServer {
         let conn = Connection::new(compat_stream, config, Mode::Server);
         let yamux_control = conn.control();
         
-        // Spawn task to drive the yamux connection
-        tokio::spawn(yamux::into_stream(conn).for_each(|_| async {}));
+        // Spawn task to drive the yamux connection and handle incoming streams
+        tokio::spawn(async move {
+            let stream = yamux::into_stream(conn);
+            tokio::pin!(stream);
+
+            while let Some(stream_result) = stream.next().await {
+                match stream_result {
+                    Ok(incoming_yamux_stream) => {
+                        debug_println!("📥 Server received incoming yamux stream from client");
+
+                        // Handle the incoming stream in a separate task
+                        // In this reverse proxy setup, the server typically doesn't receive
+                        // data streams from the client, but we handle them properly anyway
+                        tokio::spawn(async move {
+                            debug_println!("🔧 Processing incoming yamux stream on server side");
+                            // For now, we just consume the stream to ensure proper connection cleanup
+                            let mut yamux_tokio = incoming_yamux_stream.compat();
+                            let mut buffer = [0u8; 1024];
+
+                            loop {
+                                match yamux_tokio.read(&mut buffer).await {
+                                    Ok(0) => {
+                                        debug_println!("📥 Incoming yamux stream closed by client");
+                                        break;
+                                    }
+                                    Ok(n) => {
+                                        debug_println!("📥 Server received {} bytes from client through yamux", n);
+                                        // In this reverse proxy setup, we don't expect data from client,
+                                        // but we handle it to ensure proper connection management
+                                    }
+                                    Err(e) => {
+                                        debug_println!("📥 Error reading from incoming yamux stream: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        debug_println!("📥 Yamux stream error on server: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            debug_println!("📥 Server yamux connection closed");
+        });
         
         // Spawn tasks for each listener
         let mut listener_handles = Vec::new();
@@ -261,15 +313,21 @@ impl ReverseProxyServer {
             
             let handle = tokio::spawn(async move {
                 loop {
+                    debug_println!("Waiting for external connections on port {}", server_port);
                     match listener.accept().await {
                         Ok((mut user_stream, user_addr)) => {
-                            debug_println!("New connection from {} to port {}", user_addr, server_port);
+                            println!("📥 New external connection from {} to port {}", user_addr, server_port);
                             
                             // Open a new yamux stream with retry
+                            println!("🔍 Attempting to open yamux stream for external connection...");
                             let yamux_stream = match Self::open_yamux_stream_with_retry(&mut control, 3).await {
-                                Ok(s) => s,
+                                Ok(s) => {
+                                    println!("✅ Yamux stream opened successfully");
+                                    s
+                                },
                                 Err(e) => {
-                                    error_println!("Failed to open yamux stream after retries: {}", e);
+                                    error_println!("❌ Failed to open yamux stream after retries: {}", e);
+                                    error_println!("⚠️  Client may not be ready to receive streams");
                                     // Don't break the loop - continue accepting connections
                                     continue;
                                 }
@@ -279,10 +337,19 @@ impl ReverseProxyServer {
                             let mut yamux_tokio = yamux_stream.compat();
                             
                             // Send server_port as first 2 bytes
-                            if let Err(e) = yamux_tokio.write_all(&server_port.to_be_bytes()).await {
+                            let port_header = server_port.to_be_bytes();
+                            debug_println!("Sending port header: {:?} for external connection from {}", port_header, user_addr);
+                            if let Err(e) = yamux_tokio.write_all(&port_header).await {
                                 error_println!("Failed to write port header: {}", e);
                                 continue;
                             }
+
+                            // Ensure the port header is sent immediately
+                            if let Err(e) = yamux_tokio.flush().await {
+                                error_println!("Failed to flush port header: {}", e);
+                                continue;
+                            }
+                            debug_println!("Port header sent successfully, starting bidirectional forwarding");
                             
                             // Spawn task to forward data bidirectionally
                             tokio::spawn(async move {
