@@ -59,12 +59,12 @@ async fn test_token_authentication() -> Result<()> {
         }),
         proxies: vec![],
         reverse_proxies: vec![ReverseProxySection {
-            port: Some(proxy_external_port),      // 外部端口（用于无效TOKEN测试）
-            server_port: None,
-            local_port: Some(local_port),         // 转发到本地PingPong服务器
-            local_host: Some("127.0.0.1".to_string()),
+            server: proxy_external_port.to_string(),
+            local: format!("127.0.0.1:{}", local_port),
             source_ip: None,
         }],
+        reverse_mode: Some("client".to_string()),
+        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
     };
 
     // 测试无效TOKEN连接（应该快速失败）
@@ -106,12 +106,12 @@ async fn test_token_authentication() -> Result<()> {
         }),
         proxies: vec![],
         reverse_proxies: vec![ReverseProxySection {
-            port: None,                           // 不设置port，使用server_port作为外部端口
-            server_port: Some(proxy_external_port), // 外部端口
-            local_port: Some(local_port),         // 转发到本地PingPong服务器
-            local_host: Some("127.0.0.1".to_string()),
+            server: proxy_external_port.to_string(),
+            local: format!("127.0.0.1:{}", local_port),
             source_ip: None,
         }],
+        reverse_mode: Some("client".to_string()),
+        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
     };
 
     // 启动有效TOKEN客户端
@@ -268,12 +268,12 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
             }),
             proxies: vec![],
             reverse_proxies: vec![ReverseProxySection {
-                port: Some(proxy_port),
-                server_port: None,
-                local_port: Some(local_port),
-                local_host: Some("127.0.0.1".to_string()),
+                server: proxy_port.to_string(),
+                local: format!("127.0.0.1:{}", local_port),
                 source_ip: None,
             }],
+            reverse_mode: Some("client".to_string()),
+            reverse_target: Some(format!("127.0.0.1:{}", control_port)),
         };
 
         let result = tokio::time::timeout(
@@ -317,12 +317,12 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
         }),
         proxies: vec![],
         reverse_proxies: vec![ReverseProxySection {
-            port: Some(proxy_port + 1),
-            server_port: None,
-            local_port: Some(local_port),
-            local_host: Some("127.0.0.1".to_string()),
+            server: (proxy_port + 1).to_string(),
+            local: format!("127.0.0.1:{}", local_port),
             source_ip: None,
         }],
+        reverse_mode: Some("client".to_string()),
+        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
     };
 
     let invalid_result = tokio::time::timeout(

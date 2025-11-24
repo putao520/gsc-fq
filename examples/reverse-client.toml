@@ -1,0 +1,30 @@
+# Reverse Proxy Client Mode (反向代理客户端模式)
+[runtime]
+mode = "reverse_client"
+server_address = "1.2.3.4:7000"  # 连接到服务端地址
+
+[server]
+bind_ip = "127.0.0.1"
+debug = false
+
+# 反向代理规则 - 当外部连接到服务端端口时，数据会被转发到本地服务
+[[reverse_proxies]]
+port = 8080                      # 服务端端口
+local_host = "localhost"         # 本地目标主机（可选，默认localhost）
+# 本地8080端口 <=> 服务端8080端口
+
+[[reverse_proxies]]
+port = 3306
+local_host = "127.0.0.1"
+# 本地3306端口 <=> 服务端3306端口
+
+# 支持不同端口的映射
+[[reverse_proxies]]
+server_port = 80               # 服务端端口
+local_port = 8080              # 本地端口
+# 本地8080端口 <=> 服务端80端口
+
+[[reverse_proxies]]
+port = 3389
+local_host = "192.168.1.100"   # 本地RDP服务器
+source_ip = "10.20.30.40"      # 可选，伪装源IP

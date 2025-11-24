@@ -44,10 +44,8 @@ async fn test_simplest_reverse_proxy() -> Result<()> {
 
     // 4. 配置最简单的反向代理：客户端和服务器都使用相同端口
     let reverse_proxy_config = vec![ReverseProxySection {
-        port: Some(proxy_port),      // 客户端连接proxy_port，转发到本地proxy_port
-        server_port: None,
-        local_port: Some(local_port), // 转发到本地服务器的实际端口
-        local_host: Some("127.0.0.1".to_string()),
+        server: proxy_port.to_string(),        // 服务器监听端口
+        local: format!("127.0.0.1:{}", local_port), // 本地服务IP:端口
         source_ip: None,
     }];
 
@@ -55,9 +53,13 @@ async fn test_simplest_reverse_proxy() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
+            auth_token: None,
+            allowed_tokens: Vec::new(),
         }),
         proxies: vec![],
         reverse_proxies: reverse_proxy_config,
+        reverse_mode: Some("client".to_string()),
+        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
     };
 
     // 5. 启动反向代理客户端

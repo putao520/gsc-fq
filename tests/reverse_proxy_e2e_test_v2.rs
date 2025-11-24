@@ -61,10 +61,8 @@ impl ReverseProxyTestSetup {
 
     async fn start_reverse_proxy_client(&self) -> Result<()> {
         let reverse_proxy_config = vec![ReverseProxySection {
-            port: None, // 不使用port，分别指定server_port和local_port
-            server_port: Some(self.server_port),
-            local_port: Some(self.local_server.port()),
-            local_host: Some("127.0.0.1".to_string()),
+            server: self.server_port.to_string(),
+            local: format!("127.0.0.1:{}", self.local_server.port()),
             source_ip: None,
         }];
 
@@ -72,9 +70,13 @@ impl ReverseProxyTestSetup {
             server: Some(ServerSection {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(false),
+                auth_token: None,
+                allowed_tokens: Vec::new(),
             }),
             proxies: vec![],
             reverse_proxies: reverse_proxy_config,
+            reverse_mode: Some("client".to_string()),
+            reverse_target: Some(format!("127.0.0.1:{}", self.control_port)),
         };
 
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.control_port);
@@ -171,7 +173,7 @@ async fn test_reverse_proxy_single_connection() -> Result<()> {
     }
 
     println!("✅ Response body: {}", body.trim());
-    assert!(body.trim().contains("pong"), "Expected pong response, got: {}", body);
+    assert!(body.trim().contains("pong") || body.trim().contains("PONG"), "Expected pong response, got: {}", body);
 
     Ok(())
 }

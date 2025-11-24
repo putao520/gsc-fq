@@ -39,10 +39,12 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
         server: None, // No server config needed for client
         proxies: vec![],
         reverse_proxies: vec![], // Will be populated with ReverseProxySection
+        reverse_mode: Some("client".to_string()),
+        reverse_target: Some("127.0.0.1:9101".to_string()),
     };
 
     // Start reverse proxy server
-    let server = ReverseProxyServer::new("127.0.0.1".parse()?, 9101);
+    let mut server = ReverseProxyServer::new("127.0.0.1".parse()?, 9101);
     let server_handle = server.start();
 
     println!("   ✅ Reverse proxy server started on control port 9101");
@@ -51,7 +53,7 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Start reverse proxy client
-    let client = ReverseProxyClient::new("127.0.0.1:9101".parse()?, config);
+    let mut client = ReverseProxyClient::new("127.0.0.1:9101".parse()?, config);
     let client_handle = client.start();
 
     println!("   ✅ Reverse proxy client started");

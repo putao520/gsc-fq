@@ -119,20 +119,22 @@ impl ReverseProxyClient {
             self.yamux_pool_size, self.server_addr);
         
         // Convert ReverseProxySection to ReverseProxyConfig
-        let proxy_configs: Vec<ReverseProxyConfig> = self.config.reverse_proxies
-            .iter()
-            .filter_map(|rproxy| {
-                let server_port = rproxy.get_server_port()?;
-                let local_port = rproxy.get_local_port()?;
-                let local_host = rproxy.get_local_host();
-                
-                Some(ReverseProxyConfig {
-                    server_port,
-                    local_host,
-                    local_port,
-                })
-            })
-            .collect();
+        let mut proxy_configs = Vec::new();
+        for rproxy in &self.config.reverse_proxies {
+            let server_port = rproxy.get_server_port().map_err(|e| {
+                ReverseProxyError::HandshakeFailed(format!("Invalid server config: {}", e))
+            })?;
+            let local_port = rproxy.get_local_port().map_err(|e| {
+                ReverseProxyError::HandshakeFailed(format!("Invalid local config: {}", e))
+            })?;
+            let local_host = rproxy.get_local_host().unwrap_or_else(|| "localhost".to_string());
+
+            proxy_configs.push(ReverseProxyConfig {
+                server_port,
+                local_host,
+                local_port,
+            });
+        }
         
         if proxy_configs.is_empty() {
             return Err(ReverseProxyError::HandshakeFailed(

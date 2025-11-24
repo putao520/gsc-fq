@@ -8,7 +8,7 @@ use support::{
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use std::time::Duration;
-use gsc_fq::config::loader::{ConfigFile, ServerSection, ReverseProxySection};
+use gsc_fq::config::loader::{ConfigFile, ServerSection};
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 
 /// 最简单的反向代理测试
@@ -42,11 +42,9 @@ async fn test_simple_reverse_proxy() -> Result<()> {
     println!("✅ 反向代理服务器启动，控制端口: {}", control_port);
 
     // 4. 配置并启动客户端
-    let reverse_proxy_config = vec![ReverseProxySection {
-        port: Some(proxy_port),      // 服务器和客户端使用相同端口
-        server_port: None,
-        local_port: Some(local_port), // 转发到本地服务器端口
-        local_host: Some("127.0.0.1".to_string()),
+    let reverse_proxy_config = vec![gsc_fq::config::loader::ReverseProxySection {
+        server: proxy_port.to_string(),        // 服务器监听端口
+        local: format!("127.0.0.1:{}", local_port), // 本地服务IP:端口
         source_ip: None,
     }];
 
@@ -54,9 +52,13 @@ async fn test_simple_reverse_proxy() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(false),
+            auth_token: None,
+            allowed_tokens: Vec::new(),
         }),
         proxies: vec![],
         reverse_proxies: reverse_proxy_config,
+        reverse_mode: Some("client".to_string()),
+        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
     };
 
     let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), control_port);

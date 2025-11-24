@@ -357,6 +357,8 @@ impl ReverseProxyClientHandle {
             }),
             proxies: Vec::new(),
             reverse_proxies,
+            reverse_mode: Some("client".to_string()),
+            reverse_target: Some(server_addr.to_string()),
         };
 
         let handle = tokio::spawn(async move {

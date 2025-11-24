@@ -1,379 +1,237 @@
-# GSC-FQ High-Performance TCP Proxy with Reverse Proxy Support
+# GSC-FQ
 
 [![Crates.io](https://img.shields.io/crates/v/gsc-fq.svg)](https://crates.io/crates/gsc-fq)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/putao520/gsc-fq#license)
 
-GSC-FQ is a high-performance TCP proxy CLI tool built on Rust async runtime, featuring both **forward proxy** and **reverse proxy** capabilities with flexible TOML configuration.
+A high-performance TCP proxy tool written in Rust. Perfect for port forwarding and reverse proxying.
 
-## 🚀 Key Features
+## Quick Start
 
-### 🔄 Forward Proxy (Traditional)
-- Forward local ports to remote servers
-- Source IP address spoofing support
-- Multiple proxy rules configuration
-- High-performance concurrent connections
-
-### 🔀 Reverse Proxy (NEW!)
-- Bidirectional TCP proxy with Yamux multiplexing
-- Dynamic port allocation and mapping
-- Client-server architecture with control connections
-- Multiple reverse proxy configurations
-- Connection pooling and quality-aware routing
-
-## 📦 Installation
+### Installation
 
 ```bash
 cargo install gsc-fq
 ```
 
-Or build from source:
+### Basic Usage
 
-```bash
-git clone https://github.com/putao520/gsc-fq
-cd gsc-fq
-cargo build --release
-```
-
-## 🎯 Quick Start
-
-GSC-FQ supports two deployment modes. Choose the one that fits your needs:
-
-### Mode 1: Forward Proxy (Traditional)
-
-Create `default.toml`:
+1. **Create `default.toml`:**
 
 ```toml
 [server]
 bind_ip = "127.0.0.1"
 debug = false
 
+# Forward local port 8080 to remote service
 [[proxies]]
-local_port = 8080
-remote_host = "example.com"
-remote_port = 80
-source_ip = "192.168.1.100"  # Optional: Source IP spoofing
+local = "8080"
+remote = "example.com:80"
 
+# Forward local port 5432 to database
 [[proxies]]
-local_port = 5432
-remote_host = "db.example.com"
-remote_port = 5432
+local = "5432"
+remote = "db.example.com:5432"
 ```
 
-### Mode 2: Reverse Proxy (NEW!)
+2. **Run the proxy:**
 
-Create `reverse_proxy.toml`:
+```bash
+./gsc-fq
+```
+
+That's it! Your local ports `8080` and `5432` will now forward to the specified remote services.
+
+## What It Does
+
+### Forward Proxy (Port Forwarding)
+
+Redirects local ports to remote services:
+
+```toml
+[[proxies]]
+local = "8080"           # Listen on localhost:8080
+remote = "api.com:443"    # Forward to api.com:443
+source_ip = "10.0.0.1"   # Optional: Use specific source IP
+```
+
+### Reverse Proxy (Service Exposure)
+
+Expose your local services to the outside world:
+
+```toml
+[server]
+bind_ip = "0.0.0.0"  # Listen on all interfaces
+
+[[reverse_proxies]]
+server = "443"              # Outside world connects to port 443
+local = "localhost:3000"     # Forward to your local service
+```
+
+### Combined Mode
+
+Run both forward and reverse proxy at the same time:
 
 ```toml
 [server]
 bind_ip = "127.0.0.1"
-debug = true
-auth_token = "my-secret-token"     # Optional: Require TOKEN authentication
-# allowed_tokens = ["token1", "token2"]  # Alternative: Multiple allowed tokens
 
-# Simple symmetric port configuration
-[[reverse_proxies]]
-port = 8080                    # Server and client both use port 8080
-local_host = "192.168.1.100"   # Forward to this host
-source_ip = "10.0.0.1"         # Optional: Source IP for connections
+# Forward proxy rules
+[[proxies]]
+local = "8080"
+remote = "api.example.com:443"
 
-# Advanced asymmetric port configuration
+# Reverse proxy rules
 [[reverse_proxies]]
-server_port = 8081             # Reverse proxy server listens on 8081
-local_port = 3000              # Forward to local port 3000
-local_host = "192.168.1.101"
-source_ip = "10.0.0.2"
+server = "8443"
+local = "localhost:3000"
+
+# Enable reverse proxy
+reverse_mode = "server"
+reverse_target = "59000"
 ```
 
-### Start GSC-FQ
+## Configuration Options
 
-```bash
-# Auto-detects configuration (forward.toml, reverse_proxy.toml, or default.toml)
-./gsc-fq
-
-# Or specify configuration file
-./gsc-fq --config reverse_proxy.toml
-```
-
-## ⚙️ Configuration
-
-### Server Section
+### Server Settings
 
 ```toml
 [server]
-bind_ip = "127.0.0.1"  # IP address to bind reverse proxy client
-debug = true           # Enable debug logging
-auth_token = "secret"  # Optional: Require TOKEN authentication
-allowed_tokens = ["token1", "token2"]  # Optional: Multiple allowed tokens
+bind_ip = "127.0.0.1"        # IP to bind to
+debug = true                  # Enable debug logging
+auth_token = "secret-token"   # Optional: Require authentication
+allowed_tokens = ["token1", "token2"]  # Optional: Multiple valid tokens
 ```
-
-#### TOKEN Authentication (NEW!)
-
-GSC-FQ supports TOKEN-based authentication for enhanced security:
-
-**Server Configuration:**
-```toml
-[server]
-# Option 1: Single token authentication
-auth_token = "my-secret-token"
-
-# Option 2: Multiple allowed tokens
-allowed_tokens = ["token1", "token2", "token3"]
-
-# Option 3: Environment variable (recommended for production)
-# auth_token will be read from REVERSE_PROXY_TOKEN env var
-```
-
-**Client Configuration:**
-```bash
-# Option 1: Environment variable
-export REVERSE_PROXY_TOKEN="my-secret-token"
-./gsc-fq
-
-# Option 2: Configuration file
-[server]
-auth_token = "my-secret-token"
-```
-
-**Security Features:**
-- **SHA256 Configuration Hashing**: Prevents configuration tampering
-- **Token Validation**: Both server and client validate tokens
-- **Session Tracking**: Each connection gets a unique session ID
-- **Multiple Token Support**: Allow different clients with different tokens
 
 ### Forward Proxy Rules
 
 ```toml
 [[proxies]]
-local_port = 8080           # Local port to listen on
-remote_host = "target.com"  # Remote host to forward to
-remote_port = 80            # Remote port to forward to
-source_ip = "10.0.0.1"      # Optional: Source IP for outbound connections
+local = "8080"                    # Local port to listen on
+remote = "example.com:80"         # Remote host:port to forward to
+source_ip = "192.168.1.100"      # Optional: Use custom source IP
 ```
 
 ### Reverse Proxy Rules
 
-Two configuration approaches are supported:
-
-#### Approach 1: Symmetric Ports (Simple)
 ```toml
 [[reverse_proxies]]
-port = 8080                    # Both server and client use port 8080
-local_host = "localhost"       # Target host
-source_ip = "192.168.1.100"   # Optional source IP
+server = "8080"                   # External port to listen on
+local = "192.168.1.100:3000"      # Local service to forward to
+source_ip = "10.0.0.1"             # Optional: Use custom source IP
 ```
 
-#### Approach 2: Asymmetric Ports (Advanced)
+### Reverse Proxy Mode
+
+```toml
+# For reverse proxy server
+reverse_mode = "server"
+reverse_target = "59000"          # Control port
+
+# For reverse proxy client
+reverse_mode = "client"
+reverse_target = "server.com:59000"  # Server address
+```
+
+## Common Use Cases
+
+### 1. Expose Local Web Server
+
 ```toml
 [[reverse_proxies]]
-server_port = 8080             # Reverse proxy server port
-local_port = 3000              # Local service port
-local_host = "192.168.1.100"  # Target host
-source_ip = "10.0.0.1"         # Optional source IP
+server = "443"
+local = "localhost:3000"
 ```
 
-**Configuration Rules:**
-- `port` and `server_port/local_port` are mutually exclusive
-- When using asymmetric ports, both `server_port` and `local_port` must be specified
-- `server_port` values must be unique across all reverse proxy rules
-- `local_host` defaults to "localhost" if not specified
+### 2. Database Proxy
 
-## 🔀 Reverse Proxy Architecture
-
-The reverse proxy uses a client-server architecture with Yamux multiplexing:
-
-```
-┌─────────────┐    Control Channel    ┌─────────────────┐
-│   Client    │ ←───────────────────→ │   Server        │
-│  (Connects) │    (Yamux Multiplex)   │ (Listens &      │
-│             │                         │  Manages Ports) │
-└─────────────┘                         └─────────────────┘
-       │                                           │
-       │ Data Connection (Port 8080)              │
-       ├───────────────────────────────────────→ │
-       │ ←─────────────────────────────────────── │
-       ▼                                           ▼
-┌─────────────┐                          ┌─────────────┐
-│ Local Service│ ←───────────────────────→ │  Remote     │
-│   (Port N)   │    Traffic Forwarded    │  Service    │
-└─────────────┘                          └─────────────┘
-```
-
-### Key Components
-
-- **Control Connection**: Yamux multiplexed connection for port negotiation
-- **Port Mapping**: Dynamic allocation of server ports for reverse proxy
-- **Connection Pooling**: Multiple parallel connections for high throughput
-- **Quality-Aware Routing**: Intelligent connection selection based on performance
-
-## 🌐 Deployment Scenarios
-
-### Scenario 1: Service Exposure
 ```toml
-# Expose internal service to external network
-[[reverse_proxies]]
-port = 443                      # External HTTPS port
-local_host = "internal-service"  # Internal service
-local_port = 8443               # Internal HTTPS port
+[[proxies]]
+local = "5432"
+remote = "production-db.company.com:5432"
 ```
 
-### Scenario 2: Multi-Service Gateway
+### 3. Development Environment
+
 ```toml
-# Single gateway for multiple services
-[[reverse_proxies]]
-server_port = 8080
-local_port = 3000   # Web service
-local_host = "web-server"
+[[proxies]]
+local = "8080"
+remote = "staging-api.company.com:443"
 
-[[reverse_proxies]]
-server_port = 8081
-local_port = 5432   # Database service
-local_host = "db-server"
-
-[[reverse_proxies]]
-server_port = 8082
-local_port = 6379   # Redis cache
-local_host = "cache-server"
+[[proxies]]
+local = "3001"
+remote = "staging-db.company.com:5432"
 ```
 
-### Scenario 3: Development Proxy
-```toml
-# Development environment proxy
-[[reverse_proxies]]
-port = 3000
-local_host = "localhost"
-local_port = 3001  # Development server
-source_ip = "192.168.1.100"  # Test with specific source IP
-```
+### 4. API Gateway
 
-### Scenario 4: Secure Production Deployment
-```toml
-# Server configuration with security
-[server]
-bind_ip = "0.0.0.0"  # Listen on all interfaces
-debug = false
-auth_token = "prod-secure-token-2024"  # Enable authentication
-
-# Production services with security
-[[reverse_proxies]]
-server_port = 443              # External HTTPS
-local_port = 8443              # Internal HTTPS service
-local_host = "web-internal"
-source_ip = "10.0.1.100"       # Known load balancer IP
-
-[[reverse_proxies]]
-server_port = 80               # External HTTP
-local_port = 8080              # Internal HTTP service
-local_host = "api-internal"
-source_ip = "10.0.1.101"       # Known load balancer IP
-```
-
-**Environment-based Authentication (Recommended):**
-```bash
-# Set secure token from environment
-export REVERSE_PROXY_TOKEN="$(openssl rand -hex 32)"
-
-# Or use secrets management
-export REVERSE_PROXY_TOKEN="$VAULT_SECRET_TOKEN"
-
-./gsc-fq --config reverse_proxy.toml
-```
-
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-**Configuration File Not Found:**
-```
-Error: Configuration file 'reverse_proxy.toml' not found
-```
-
-**Port Conflicts:**
-```
-Error: Port 8080 is already in use
-```
-
-**Connection Failures:**
-- Check firewall rules for both control and data ports
-- Verify network connectivity between client and server
-- Ensure target services are running
-
-**Authentication Failures:**
-```
-Error: Handshake failed: Authentication failed
-```
-- Verify REVERSE_PROXY_TOKEN environment variable is set
-- Check that client token matches server's auth_token or allowed_tokens
-- Ensure tokens don't have trailing spaces or special characters
-
-**Configuration Hash Mismatch:**
-```
-Error: Handshake failed: Configuration integrity check failed
-```
-- This indicates configuration tampering or version mismatch
-- Restart both client and server with identical configuration files
-- Check for configuration file corruption
-
-### Debug Mode
-
-Enable detailed logging:
 ```toml
 [server]
-debug = true  # Shows detailed connection and routing information
+bind_ip = "0.0.0.0"
+
+[[reverse_proxies]]
+server = "80"
+local = "user-service:3000"
+
+[[reverse_proxies]]
+server = "81"
+local = "order-service:3001"
 ```
 
-### Performance Tuning
+## Performance
 
-Environment variables for connection tuning:
-```bash
-export YAMUX_POOL_SIZE=8              # Connection pool size (default: 32)
-export BLACKHOLE_FAILURE_THRESHOLD=5 # Blackhole detection threshold
-```
+- **1000+ concurrent connections**
+- **1GB/s+ throughput**
+- **Sub-millisecond latency**
+- **50MB memory usage (idle)**
 
-## 📊 Performance
-
-- **Concurrent Connections**: 1000+ simultaneous connections
-- **Throughput**: 1GB/s+ (with connection pooling)
-- **Memory Usage**: 50MB+ (idle), scales with connections
-- **Latency**: Sub-millisecond proxy overhead
-
-## 🔒 Security Considerations
-
-1. **Source IP Spoofing**: Ensure you have permission to use specified source IPs
-2. **Network Access**: Configure firewall rules appropriately for control and data ports
-3. **Configuration Security**: Protect configuration files from unauthorized access
-
-## 📋 Requirements
-
-- Rust 1.70+
-- Supported OS: Linux, Windows, macOS
-- Memory: 50MB minimum (scales with connections)
-- Network: TCP/IP connectivity
-
-## 📄 License
-
-Dual-licensed under MIT or Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
-
-## 🏗️ Development
+## Development
 
 ```bash
 # Build
 cargo build --release
 
-# Test
+# Run tests
 cargo test
 
 # Run comprehensive tests
 cargo test --test comprehensive_reverse_proxy_test
 
-# Benchmarks
+# Run benchmarks
 cargo bench
 ```
 
-## 🎯 Use Cases
+## Authentication (Optional)
 
-- **Service Exposure**: Expose internal services securely
-- **API Gateway**: Single entry point for multiple microservices
-- **Load Balancing**: Distribute traffic across multiple instances
-- **Development Proxy**: Route traffic between development and production
-- **Network Testing**: Simulate different network configurations
-- **Service Migration**: Gradual traffic shifting between services
+### Server Configuration
+
+```toml
+[server]
+auth_token = "your-secret-token"
+```
+
+### Client Usage
+
+```bash
+# Method 1: Environment variable
+export REVERSE_PROXY_TOKEN="your-secret-token"
+./gsc-fq
+
+# Method 2: Config file
+[server]
+auth_token = "your-secret-token"
+```
+
+## Requirements
+
+- Rust 1.70+
+- Supported OS: Linux, Windows, macOS
+- Memory: 50MB minimum
+- Network: TCP/IP connectivity
+
+## License
+
+Dual-licensed under MIT or Apache-2.0.
+
+---
+
+**Questions?** Check the [examples](https://github.com/putao520/gsc-fq/tree/main/examples) or open an issue!

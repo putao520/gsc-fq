@@ -25,10 +25,8 @@ async fn test_reverse_proxy_server_client_ping_pong() -> Result<()> {
     println!("Reverse proxy server started");
 
     let reverse_proxy_config = vec![ReverseProxySection {
-        port: None,
-        server_port: Some(server_port),
-        local_port: Some(local_port),
-        local_host: Some("127.0.0.1".to_string()),
+        server: server_port.to_string(),
+        local: format!("127.0.0.1:{}", local_port),
         source_ip: None,
     }];
 
@@ -104,17 +102,13 @@ async fn test_reverse_proxy_multiple_ports() -> Result<()> {
 
     let reverse_proxy_config = vec![
         ReverseProxySection {
-            port: None,
-            server_port: Some(server_port1),
-            local_port: Some(local_port1),
-            local_host: Some("127.0.0.1".to_string()),
+            server: server_port1.to_string(),
+            local: format!("127.0.0.1:{}", local_port1),
             source_ip: None,
         },
         ReverseProxySection {
-            port: None,
-            server_port: Some(server_port2),
-            local_port: Some(local_port2),
-            local_host: Some("127.0.0.1".to_string()),
+            server: server_port2.to_string(),
+            local: format!("127.0.0.1:{}", local_port2),
             source_ip: None,
         },
     ];
@@ -175,10 +169,8 @@ async fn test_reverse_proxy_multiple_connections() -> Result<()> {
     let proxy_server = ReverseProxyServerHandle::start(control_port).await?;
 
     let reverse_proxy_config = vec![ReverseProxySection {
-        port: None,
-        server_port: Some(server_port),
-        local_port: Some(local_port),
-        local_host: Some("127.0.0.1".to_string()),
+        server: server_port.to_string(),
+        local: format!("127.0.0.1:{}", local_port),
         source_ip: None,
     }];
 
@@ -245,10 +237,8 @@ async fn test_reverse_proxy_with_port_shorthand() -> Result<()> {
     let proxy_server = ReverseProxyServerHandle::start(control_port).await?;
 
     let reverse_proxy_config = vec![ReverseProxySection {
-        port: Some(local_port),
-        server_port: None,
-        local_port: None,
-        local_host: Some("127.0.0.1".to_string()),
+        server: local_port.to_string(),
+        local: format!("127.0.0.1:{}", local_port),
         source_ip: None,
     }];
 

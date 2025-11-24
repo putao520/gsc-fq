@@ -1,0 +1,25 @@
+# Forward Proxy Mode (默认转发代理模式)
+[runtime]
+mode = "forward"  # 可选，默认就是forward
+
+[server]
+bind_ip = "127.0.0.1"
+debug = false
+
+# 正向代理规则
+[[proxies]]
+local_port = 8080
+remote_host = "example.com"
+remote_port = 80
+source_ip = "192.168.1.100"  # 可选，伪装源IP
+
+[[proxies]]
+local_port = 5432
+remote_host = "db.example.com"
+remote_port = 5432
+
+[[proxies]]
+local_port = 3389
+remote_host = "rdp.example.com"
+remote_port = 3389
+source_ip = "10.20.30.40"

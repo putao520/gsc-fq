@@ -31,8 +31,19 @@ impl ProxyServer {
 
     /// Add proxy configuration
     pub fn add_proxy(&mut self, proxy_config: &ProxySection) -> Result<()> {
-        let remote_addr =
-            ConfigLoader::create_socket_addr(&proxy_config.remote_host, proxy_config.remote_port)?;
+        // Get local port and IP from new format
+        let local_port = proxy_config.get_local_port()?;
+        let local_bind_ip = if let Some(local_ip) = proxy_config.get_local_ip() {
+            ConfigLoader::parse_ip_address(&local_ip)?
+        } else {
+            self.bind_ip
+        };
+
+        // Get remote host and port from new format
+        let remote_host = proxy_config.get_remote_host()?;
+        let remote_port = proxy_config.get_remote_port()?;
+        let remote_addr = ConfigLoader::create_socket_addr(&remote_host, remote_port)?;
+
         let source_ip = if let Some(ref source_ip_str) = proxy_config.source_ip {
             Some(ConfigLoader::parse_ip_address(source_ip_str)?)
         } else {
@@ -41,8 +52,8 @@ impl ProxyServer {
 
         // 连接池始终启用（使用内置安全策略）
         let instance = ProxyInstance::new(
-            self.bind_ip,
-            proxy_config.local_port,
+            local_bind_ip,
+            local_port,
             remote_addr,
             source_ip,
         )?;
@@ -545,9 +556,8 @@ mod tests {
         let bind_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
         let proxy_config = ProxySection {
-            local_port: 8080,
-            remote_host: "192.168.1.100".to_string(),
-            remote_port: 8080,
+            local: "8080".to_string(),
+            remote: "192.168.1.100:8080".to_string(),
             source_ip: None,
         };
 

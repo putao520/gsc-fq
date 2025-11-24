@@ -6,17 +6,20 @@ use std::path::Path;
 use crate::error::{AppError, ConfigError, Result};
 
 /// TOML configuration file structure
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ConfigFile {
     pub server: Option<ServerSection>,
     #[serde(default)]
     pub proxies: Vec<ProxySection>,
     #[serde(default)]
     pub reverse_proxies: Vec<ReverseProxySection>,
+    /// Reverse proxy mode configuration
+    pub reverse_mode: Option<String>,        // "server" or "client"
+    pub reverse_target: Option<String>,      // port number for server, or address for client
 }
 
 /// Server configuration section
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ServerSection {
     pub bind_ip: Option<String>,
     pub debug: Option<bool>,
@@ -77,40 +80,178 @@ impl Default for ServerSection {
 /// Proxy configuration section
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProxySection {
-    pub local_port: u16,
-    pub remote_host: String,
-    pub remote_port: u16,
+    pub local: String,           // "8080" or "127.0.0.1:8080"
+    pub remote: String,          // "80" or "example.com:80" or "192.168.1.100:80"
     pub source_ip: Option<String>,
+}
+
+impl ProxySection {
+    /// Get local port
+    pub fn get_local_port(&self) -> Result<u16> {
+        if self.local.contains(':') {
+            // Format: "IP:PORT"
+            let parts: Vec<&str> = self.local.split(':').collect();
+            if parts.len() != 2 {
+                return Err(AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "local".to_string(),
+                    reason: format!("Invalid local format '{}', expected 'IP:PORT' or 'PORT'", self.local),
+                }));
+            }
+            parts[1].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "local".to_string(),
+                reason: format!("Invalid port number in '{}'", self.local),
+            }))
+        } else {
+            // Format: "PORT"
+            self.local.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "local".to_string(),
+                reason: format!("Invalid port number '{}'", self.local),
+            }))
+        }
+    }
+
+    /// Get local IP (None if using wildcard)
+    pub fn get_local_ip(&self) -> Option<String> {
+        if self.local.contains(':') {
+            let parts: Vec<&str> = self.local.split(':').collect();
+            if parts.len() == 2 {
+                Some(parts[0].to_string())
+            } else {
+                None
+            }
+        } else {
+            None // Use default bind IP
+        }
+    }
+
+    /// Get remote host
+    pub fn get_remote_host(&self) -> Result<String> {
+        if self.remote.contains(':') {
+            // Format: "HOST:PORT"
+            let parts: Vec<&str> = self.remote.split(':').collect();
+            if parts.len() < 2 {
+                return Err(AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "remote".to_string(),
+                    reason: format!("Invalid remote format '{}', expected 'HOST:PORT' or 'PORT'", self.remote),
+                }));
+            }
+            Ok(parts[0..parts.len()-1].join(":")) // Handle IPv6 addresses
+        } else {
+            // Format: "PORT" - assume localhost
+            Ok("localhost".to_string())
+        }
+    }
+
+    /// Get remote port
+    pub fn get_remote_port(&self) -> Result<u16> {
+        if self.remote.contains(':') {
+            // Format: "HOST:PORT"
+            let parts: Vec<&str> = self.remote.rsplit(':').collect();
+            if parts.len() < 2 {
+                return Err(AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "remote".to_string(),
+                    reason: format!("Invalid remote format '{}'", self.remote),
+                }));
+            }
+            parts[0].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "remote".to_string(),
+                reason: format!("Invalid port number in '{}'", self.remote),
+            }))
+        } else {
+            // Format: "PORT"
+            self.remote.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "remote".to_string(),
+                reason: format!("Invalid port number '{}'", self.remote),
+            }))
+        }
+    }
 }
 
 /// Reverse proxy configuration section
 #[derive(Debug, Deserialize, Clone)]
 pub struct ReverseProxySection {
-    // Port configuration - either use `port` (same on both sides)
-    // or `server_port` + `local_port` (different ports)
-    pub port: Option<u16>,
-    pub server_port: Option<u16>,
-    pub local_port: Option<u16>,
-    
-    pub local_host: Option<String>,
+    // Server side: can be "7000" or "0.0.0.0:7000"
+    pub server: String,
+    // Local side: can be "8080" or "127.0.0.1:8080"
+    pub local: String,
     pub source_ip: Option<String>,
 }
 
 impl ReverseProxySection {
-    /// Get the server port (from either `port` or `server_port`)
-    pub fn get_server_port(&self) -> Option<u16> {
-        self.port.or(self.server_port)
+    /// Get server port
+    pub fn get_server_port(&self) -> Result<u16> {
+        if self.server.contains(':') {
+            // Format: "IP:PORT"
+            let parts: Vec<&str> = self.server.rsplit(':').collect();
+            if parts.len() < 2 {
+                return Err(AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "server".to_string(),
+                    reason: format!("Invalid server format '{}'", self.server),
+                }));
+            }
+            parts[0].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "server".to_string(),
+                reason: format!("Invalid port number in '{}'", self.server),
+            }))
+        } else {
+            // Format: "PORT"
+            self.server.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "server".to_string(),
+                reason: format!("Invalid port number '{}'", self.server),
+            }))
+        }
     }
-    
-    /// Get the local port (from either `port` or `local_port`)
-    pub fn get_local_port(&self) -> Option<u16> {
-        self.port.or(self.local_port)
+
+    /// Get server IP (None if using wildcard)
+    pub fn get_server_ip(&self) -> Option<String> {
+        if self.server.contains(':') {
+            let parts: Vec<&str> = self.server.split(':').collect();
+            if parts.len() >= 2 {
+                Some(parts[0..parts.len()-1].join(":")) // Handle IPv6
+            } else {
+                None
+            }
+        } else {
+            None // Use default bind IP
+        }
     }
-    
-    /// Get the local host (returns "localhost" if not specified)
-    pub fn get_local_host(&self) -> String {
-        self.local_host.clone()
-            .unwrap_or_else(|| "localhost".to_string())
+
+    /// Get local port
+    pub fn get_local_port(&self) -> Result<u16> {
+        if self.local.contains(':') {
+            // Format: "IP:PORT"
+            let parts: Vec<&str> = self.local.rsplit(':').collect();
+            if parts.len() < 2 {
+                return Err(AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "local".to_string(),
+                    reason: format!("Invalid local format '{}'", self.local),
+                }));
+            }
+            parts[0].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "local".to_string(),
+                reason: format!("Invalid port number in '{}'", self.local),
+            }))
+        } else {
+            // Format: "PORT"
+            self.local.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
+                path: "local".to_string(),
+                reason: format!("Invalid port number '{}'", self.local),
+            }))
+        }
+    }
+
+    /// Get local host (None if using localhost)
+    pub fn get_local_host(&self) -> Option<String> {
+        if self.local.contains(':') {
+            let parts: Vec<&str> = self.local.split(':').collect();
+            if parts.len() >= 2 {
+                Some(parts[0..parts.len()-1].join(":")) // Handle IPv6
+            } else {
+                Some("localhost".to_string())
+            }
+        } else {
+            Some("localhost".to_string()) // Use localhost by default
+        }
     }
 }
 
@@ -146,144 +287,132 @@ impl ConfigFile {
             }
         }
 
-        let mut ports = HashSet::new();
+        let mut local_ports = HashSet::new();
 
+        // Validate proxies (forward proxy)
         for (index, proxy) in self.proxies.iter_mut().enumerate() {
             let prefix = format!("proxies[{}]", index);
 
-            if proxy.local_port == 0 {
-                errors.push(format!("{}.local_port must be between 1 and 65535", prefix));
+            // Validate local format
+            let local_port = match proxy.get_local_port() {
+                Ok(port) => port,
+                Err(e) => {
+                    errors.push(format!("{}.local: {}", prefix, e));
+                    continue;
+                }
+            };
+
+            if local_port == 0 {
+                errors.push(format!("{}.local port must be between 1 and 65535", prefix));
             }
 
-            if proxy.remote_port == 0 {
+            // Validate remote format
+            let _remote_host = match proxy.get_remote_host() {
+                Ok(host) => host,
+                Err(e) => {
+                    errors.push(format!("{}.remote: {}", prefix, e));
+                    continue;
+                }
+            };
+
+            let remote_port = match proxy.get_remote_port() {
+                Ok(port) => port,
+                Err(e) => {
+                    errors.push(format!("{}.remote: {}", prefix, e));
+                    continue;
+                }
+            };
+
+            if remote_port == 0 {
+                errors.push(format!("{}.remote port must be between 1 and 65535", prefix));
+            }
+
+            // Check for duplicate local ports
+            if !local_ports.insert(local_port) {
                 errors.push(format!(
-                    "{}.remote_port must be between 1 and 65535",
-                    prefix
+                    "Duplicate local port {} detected in {}",
+                    local_port, prefix
                 ));
             }
 
-            let trimmed_host = proxy.remote_host.trim();
-            if trimmed_host.is_empty() {
-                errors.push(format!("{}.remote_host cannot be empty", prefix));
-            } else if trimmed_host != proxy.remote_host {
-                proxy.remote_host = trimmed_host.to_string();
-            }
-
-            if !ports.insert(proxy.local_port) {
-                errors.push(format!(
-                    "Duplicate local_port {} detected in {}",
-                    proxy.local_port, prefix
-                ));
-            }
-
-            if let Some(source_ip) = proxy.source_ip.clone() {
+            // Validate and sanitize source_ip if present
+            if let Some(ref source_ip) = proxy.source_ip {
                 let trimmed = source_ip.trim();
 
                 if trimmed.is_empty() {
                     warnings.push(format!("{}.source_ip is empty and will be ignored", prefix));
                     proxy.source_ip = None;
-                    continue;
-                }
-
-                if trimmed.eq_ignore_ascii_case("null") {
+                } else if trimmed.eq_ignore_ascii_case("null") {
                     warnings.push(format!(
-                        "{}.source_ip contains invalid 'null' value; the field will be ignored",
+                        "{}.source_ip contains 'null' value; will be ignored",
                         prefix
                     ));
                     proxy.source_ip = None;
-                    continue;
-                }
-
-                if trimmed.parse::<IpAddr>().is_err() {
+                } else if trimmed.parse::<IpAddr>().is_err() {
                     errors.push(format!(
                         "{}.source_ip '{}' is not a valid IP address",
                         prefix, trimmed
                     ));
-                } else if trimmed != source_ip {
-                    proxy.source_ip = Some(trimmed.to_string());
                 }
             }
         }
 
         // Validate reverse_proxies
-        let mut reverse_server_ports = HashSet::new();
-        
-        for (index, rproxy) in self.reverse_proxies.iter_mut().enumerate() {
+        let mut server_ports = HashSet::new();
+
+        for (index, rproxy) in self.reverse_proxies.iter().enumerate() {
             let prefix = format!("reverse_proxies[{}]", index);
-            
-            // Port configuration validation
-            let has_port = rproxy.port.is_some();
-            let has_server_port = rproxy.server_port.is_some();
-            let has_local_port = rproxy.local_port.is_some();
-            
-            if has_port && (has_server_port || has_local_port) {
+
+            // Validate server format
+            let server_port = match rproxy.get_server_port() {
+                Ok(port) => port,
+                Err(e) => {
+                    errors.push(format!("{}.server: {}", prefix, e));
+                    continue;
+                }
+            };
+
+            if server_port == 0 {
+                errors.push(format!("{}.server port must be between 1 and 65535", prefix));
+            }
+
+            // Check for duplicate server ports
+            if !server_ports.insert(server_port) {
                 errors.push(format!(
-                    "{}: cannot specify 'port' together with 'server_port' or 'local_port'",
-                    prefix
-                ));
-            } else if !has_port && !(has_server_port && has_local_port) {
-                errors.push(format!(
-                    "{}: must specify either 'port' or both 'server_port' and 'local_port'",
-                    prefix
+                    "Duplicate server port {} detected in {}",
+                    server_port, prefix
                 ));
             }
-            
-            // Validate server port
-            if let Some(server_port) = rproxy.get_server_port() {
-                if server_port == 0 {
-                    errors.push(format!("{}: server_port must be between 1 and 65535", prefix));
+
+            // Validate local format
+            let local_port = match rproxy.get_local_port() {
+                Ok(port) => port,
+                Err(e) => {
+                    errors.push(format!("{}.local: {}", prefix, e));
+                    continue;
                 }
-                if !reverse_server_ports.insert(server_port) {
-                    errors.push(format!(
-                        "Duplicate server_port {} detected in {}",
-                        server_port, prefix
-                    ));
-                }
+            };
+
+            if local_port == 0 {
+                errors.push(format!("{}.local port must be between 1 and 65535", prefix));
             }
-            
-            // Validate local port
-            if let Some(local_port) = rproxy.get_local_port() {
-                if local_port == 0 {
-                    errors.push(format!("{}: local_port must be between 1 and 65535", prefix));
-                }
-            }
-            
-            // Validate local_host (trim and set default)
-            if let Some(ref host) = rproxy.local_host {
-                let trimmed = host.trim();
-                if trimmed.is_empty() {
-                    rproxy.local_host = None; // Will use default "localhost"
-                } else if trimmed != host {
-                    rproxy.local_host = Some(trimmed.to_string());
-                }
-            }
-            
-            // Validate source_ip
-            if let Some(source_ip) = rproxy.source_ip.clone() {
+
+            // Validate source_ip if present
+            if let Some(ref source_ip) = rproxy.source_ip {
                 let trimmed = source_ip.trim();
-                
+
                 if trimmed.is_empty() {
                     warnings.push(format!("{}.source_ip is empty and will be ignored", prefix));
-                    rproxy.source_ip = None;
-                    continue;
-                }
-                
-                if trimmed.eq_ignore_ascii_case("null") {
+                } else if trimmed.eq_ignore_ascii_case("null") {
                     warnings.push(format!(
-                        "{}.source_ip contains invalid 'null' value; the field will be ignored",
+                        "{}.source_ip contains 'null' value; will be ignored",
                         prefix
                     ));
-                    rproxy.source_ip = None;
-                    continue;
-                }
-                
-                if trimmed.parse::<IpAddr>().is_err() {
+                } else if trimmed.parse::<IpAddr>().is_err() {
                     errors.push(format!(
                         "{}.source_ip '{}' is not a valid IP address",
                         prefix, trimmed
                     ));
-                } else if trimmed != source_ip {
-                    rproxy.source_ip = Some(trimmed.to_string());
                 }
             }
         }
@@ -493,12 +622,13 @@ mod tests {
         let mut config = ConfigFile {
             server: None,
             proxies: vec![ProxySection {
-                local_port: 8080,
-                remote_host: "example.com".to_string(),
-                remote_port: 80,
+                local: "8080".to_string(),
+                remote: "example.com:80".to_string(),
                 source_ip: Some("invalid-ip".to_string()),
             }],
             reverse_proxies: vec![],
+            reverse_mode: None,
+            reverse_target: None,
         };
 
         let result = config.validate();
@@ -514,9 +644,8 @@ mod tests {
     fn test_validate_handles_null_source_ip() {
         let content = r#"
 [[proxies]]
-local_port = 9000
-remote_host = "example.com"
-remote_port = 443
+local = "9000"
+remote = "example.com:443"
 source_ip = "null"
 "#;
 
@@ -533,9 +662,8 @@ source_ip = "null"
     fn test_sanitize_unquoted_null_source_ip() {
         let content = r#"
 [[proxies]]
-local_port = 8000
-remote_host = "example.org"
-remote_port = 80
+local = "8000"
+remote = "example.org:80"
 source_ip = null
 "#;
 
@@ -552,15 +680,14 @@ source_ip = null
     fn test_missing_required_field_error() {
         let content = r#"
 [[proxies]]
-local_port = 7000
-remote_host = "example.com"
-# Missing remote_port on purpose
+local = "7000"
+# Missing remote field on purpose
 "#;
 
         let err = ConfigLoader::load_from_str_with_warnings(content).unwrap_err();
         match err {
             ConfigError::MissingRequiredField(field) => {
-                assert_eq!(field, "remote_port");
+                assert_eq!(field, "remote");
             }
             other => panic!("Expected MissingRequiredField, got {:?}", other),
         }
@@ -572,25 +699,25 @@ remote_host = "example.com"
             server: None,
             proxies: vec![
                 ProxySection {
-                    local_port: 8080,
-                    remote_host: "example.com".to_string(),
-                    remote_port: 80,
+                    local: "8080".to_string(),
+                    remote: "example.com:80".to_string(),
                     source_ip: None,
                 },
                 ProxySection {
-                    local_port: 8080,
-                    remote_host: "example.net".to_string(),
-                    remote_port: 8080,
+                    local: "8080".to_string(),
+                    remote: "example.net:8080".to_string(),
                     source_ip: None,
                 },
             ],
             reverse_proxies: vec![],
+            reverse_mode: None,
+            reverse_target: None,
         };
 
         let result = config.validate();
         assert!(result.is_err());
         if let Err(ConfigError::InvalidConfigValue { reason, .. }) = result {
-            assert!(reason.contains("Duplicate local_port"));
+            assert!(reason.contains("Duplicate local port"));
         } else {
             panic!("Expected InvalidConfigValue error for duplicate port");
         }
@@ -612,9 +739,8 @@ remote_host = "example.com"
         let file = NamedTempFile::new().expect("create temp file");
         let content = r#"
 [[proxies]]
-local_port = 8100
-remote_host = "example.com"
-remote_port = 8101
+local = "8100"
+remote = "example.com:8101"
 source_ip = null
 "#;
         fs::write(file.path(), content).expect("write config");
@@ -630,9 +756,8 @@ bind_ip = ""
 allowed_tokens = []
 
 [[proxies]]
-local_port = 8200
-remote_host = "example.com"
-remote_port = 8201
+local = "8200"
+remote = "example.com:8201"
 "#;
 
         let (config, warnings) =
@@ -665,9 +790,8 @@ bind_ip = " 127.0.0.1 "
 allowed_tokens = []
 
 [[proxies]]
-local_port = 8080
-remote_host = "example.com "
-remote_port = 80
+local = "8080"
+remote = "example.com:80"
 "#;
 
         let (config, warnings) =
@@ -677,7 +801,7 @@ remote_port = 80
         let server = config.server.as_ref().expect("Server section should exist");
         assert_eq!(server.bind_ip.as_deref(), Some("127.0.0.1"));
         assert_eq!(config.proxies.len(), 1);
-        assert_eq!(config.proxies[0].local_port, 8080);
-        assert_eq!(config.proxies[0].remote_host, "example.com");
+        assert_eq!(config.proxies[0].local, "8080");
+        assert_eq!(config.proxies[0].remote, "example.com:80");
     }
 }
