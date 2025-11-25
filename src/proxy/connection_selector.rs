@@ -110,7 +110,7 @@ impl ConnectionSelector {
         
         if total_weight == 0 {
             // 所有连接评分都是0，随机选择
-            let index = rand::random::<usize>() % pool.len();
+            let index = rand::thread_rng().random_range(0..pool.len());
             return Some(pool.swap_remove(index));
         }
         

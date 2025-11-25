@@ -1,0 +1,20 @@
+# GSC-FQ 反向代理客户端示例
+# 连接到服务端并暴露本地服务
+
+[server]
+bind_ip = "127.0.0.1"
+debug = true
+allowed_tokens = []
+
+# 反向代理客户端配置
+[reverse_proxy_client]
+server = "server.example.com:9001"  # 服务端地址
+
+# 要通过反向代理暴露的本地服务
+[[reverse_proxies]]
+server = "443"      # 在服务端暴露的端口
+local = "localhost:3000"  # 本地web服务器
+
+[[reverse_proxies]]
+server = "22"       # 在服务端暴露的SSH端口
+local = "localhost:22"    # 本地SSH服务

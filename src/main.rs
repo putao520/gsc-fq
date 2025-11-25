@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
         Err(e) => return Err(e),
     };
 
+    
     // Initialize debug system from config
     let debug_enabled = if let Some(server_section) = &config.server {
         server_section.debug.unwrap_or(false)
@@ -71,70 +72,49 @@ async fn main() -> Result<()> {
         }));
     }
 
-    // 2. Start reverse proxy if configured
-    if let Some(reverse_mode) = &config.reverse_mode {
-        match reverse_mode.as_str() {
-            "server" => {
-                if let Some(target) = &config.reverse_target {
-                    let port: u16 = target.parse()
-                        .map_err(|_| AppError::Internal {
-                            message: format!("Invalid reverse_target port: {}", target)
-                        })?;
+    // 2. Start reverse proxy server if configured
+    if let Some(server_config) = &config.reverse_proxy_server {
+        println!("🚀 Starting reverse proxy server on port {}...", server_config.port);
 
-                    println!("🚀 Starting reverse proxy server on port {}...", port);
+        // Get bind IP
+        let bind_ip: IpAddr = config.server.as_ref()
+            .and_then(|s| s.bind_ip.as_ref())
+            .and_then(|ip| ip.parse().ok())
+            .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
 
-                    // Get bind IP
-                    let bind_ip: IpAddr = config.server.as_ref()
-                        .and_then(|s| s.bind_ip.as_ref())
-                        .and_then(|ip| ip.parse().ok())
-                        .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
-
-                    let mut reverse_server = ReverseProxyServer::new(bind_ip, port);
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = reverse_server.start().await {
-                            eprintln!("❌ Reverse proxy server failed: {}", e);
-                        }
-                    }));
-                } else {
-                    eprintln!("❌ reverse_mode 'server' requires reverse_target (port number)");
-                    std::process::exit(1);
-                }
+        let mut reverse_server = ReverseProxyServer::new(bind_ip, server_config.port);
+        tasks.push(tokio::spawn(async move {
+            if let Err(e) = reverse_server.start().await {
+                eprintln!("❌ Reverse proxy server failed: {}", e);
             }
-            "client" => {
-                if let Some(target) = &config.reverse_target {
-                    let server_addr: SocketAddr = target.parse()
-                        .map_err(|_| AppError::Internal {
-                            message: format!("Invalid reverse_target address: {}", target)
-                        })?;
+        }));
+    }
 
-                    if config.reverse_proxies.is_empty() {
-                        eprintln!("❌ No [[reverse_proxies]] configured for reverse client mode");
-                        std::process::exit(1);
-                    }
+    // 3. Start reverse proxy client if configured
+    if let Some(client_config) = &config.reverse_proxy_client {
+        let server_addr: SocketAddr = client_config.server.parse()
+            .map_err(|_| AppError::Internal {
+                message: format!("Invalid reverse_proxy_client server address: {}", client_config.server)
+            })?;
 
-                    println!("🚀 Starting reverse proxy client connecting to {}...", server_addr);
-
-                    let mut reverse_client = ReverseProxyClient::new(server_addr, config.clone());
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = reverse_client.start().await {
-                            eprintln!("❌ Reverse proxy client failed: {}", e);
-                        }
-                    }));
-                } else {
-                    eprintln!("❌ reverse_mode 'client' requires reverse_target (server address)");
-                    std::process::exit(1);
-                }
-            }
-            _ => {
-                eprintln!("❌ Invalid reverse_mode '{}'. Use 'server' or 'client'", reverse_mode);
-                std::process::exit(1);
-            }
+        if config.reverse_proxies.is_empty() {
+            eprintln!("❌ No [[reverse_proxies]] configured for reverse proxy client");
+            std::process::exit(1);
         }
+
+        println!("🚀 Starting reverse proxy client connecting to {}...", server_addr);
+
+        let mut reverse_client = ReverseProxyClient::new(server_addr, config.clone());
+        tasks.push(tokio::spawn(async move {
+            if let Err(e) = reverse_client.start().await {
+                eprintln!("❌ Reverse proxy client failed: {}", e);
+            }
+        }));
     }
 
     if tasks.is_empty() {
         eprintln!("❌ No proxy configurations found in default.toml!");
-        eprintln!("Add [[proxies]] for forward proxy or reverse_mode for reverse proxy.");
+        eprintln!("Add [[proxies]] for forward proxy or [[reverse_proxies]] + reverse_proxy_server/client for reverse proxy.");
         std::process::exit(1);
     }
 

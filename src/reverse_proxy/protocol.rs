@@ -39,6 +39,7 @@ pub enum ControlMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReverseProxyConfig {
     pub server_port: u16,
+    pub server_host: Option<String>,  // 新增：服务器绑定IP
     pub local_host: String,
     pub local_port: u16,
 }
@@ -122,6 +123,7 @@ mod tests {
             token: "test-token".to_string(),
             proxies: vec![ReverseProxyConfig {
                 server_port: 8080,
+                server_host: None,
                 local_host: "localhost".to_string(),
                 local_port: 80,
             }],

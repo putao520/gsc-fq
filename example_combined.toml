@@ -1,0 +1,25 @@
+# GSC-FQ 组合模式示例
+# 同时运行隧道代理和反向代理
+
+[server]
+bind_ip = "127.0.0.1"
+debug = true
+allowed_tokens = []
+
+# 隧道代理规则 - 转发本地端口到远程服务
+[[proxies]]
+local = "5432"
+remote = "database.company.com:5432"  # 数据库转发
+
+[[proxies]]
+local = "8080"
+remote = "api.example.com:443"  # API转发
+
+# 反向代理服务端配置
+[reverse_proxy_server]
+port = 9001
+
+# 要通过反向代理暴露的本地服务
+[[reverse_proxies]]
+server = "2222"     # 对外暴露SSH
+local = "localhost:22"  # 本地SSH服务

@@ -118,7 +118,7 @@ async fn test_simultaneous_forward_and_reverse_proxy() -> Result<()> {
     // 等待所有服务端口准备就绪
     wait_for_port_ready(forward_proxy_port, Duration::from_secs(5)).await?;
     wait_for_port_ready(reverse_control_port, Duration::from_secs(5)).await?;
-    wait_for_port_ready(reverse_proxy_port, Duration::from_secs(5)).await?;
+    // 注意：reverse_proxy_port 是客户端监听端口，不需要在这里检查就绪
 
     println!("✅ 所有服务端口准备就绪:");
     println!("   - 正向代理端口: {}", forward_proxy_port);

@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/gsc-fq.svg)](https://crates.io/crates/gsc-fq)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/putao520/gsc-fq#license)
 
-A high-performance TCP proxy tool written in Rust. Perfect for port forwarding and reverse proxying.
+A high-performance TCP tunnel proxy tool written in Rust. Perfect for port forwarding (tunnel proxy) and reverse tunnel proxying with declarative configuration.
 
 ## Quick Start
 
@@ -18,6 +18,7 @@ cargo install gsc-fq
 1. **Create `default.toml`:**
 
 ```toml
+# Simple tunnel proxy - forward local ports to remote services
 [server]
 bind_ip = "127.0.0.1"
 debug = false
@@ -43,9 +44,9 @@ That's it! Your local ports `8080` and `5432` will now forward to the specified 
 
 ## What It Does
 
-### Forward Proxy (Port Forwarding)
+### Tunnel Proxy (Port Forwarding)
 
-Redirects local ports to remote services:
+Create TCP tunnels that redirect local ports to remote services:
 
 ```toml
 [[proxies]]
@@ -54,41 +55,114 @@ remote = "api.com:443"    # Forward to api.com:443
 source_ip = "10.0.0.1"   # Optional: Use specific source IP
 ```
 
-### Reverse Proxy (Service Exposure)
+### Reverse Tunnel Proxy (Service Exposure Through Tunnel)
 
-Expose your local services to the outside world:
+Expose your local services through a tunnel with simple, intuitive configuration:
 
+**Server Mode** - Wait for client connections:
 ```toml
 [server]
-bind_ip = "0.0.0.0"  # Listen on all interfaces
+bind_ip = "0.0.0.0"
+debug = true
+
+# Reverse proxy server configuration
+[reverse_proxy_server]
+port = 9001  # Control port for clients
 
 [[reverse_proxies]]
-server = "443"              # Outside world connects to port 443
-local = "localhost:3000"     # Forward to your local service
+server = "443"              # Port exposed on server
+local = "localhost:3000"    # Your local service
+
+[[reverse_proxies]]
+server = "8080"             # Another exposed port
+local = "localhost:8080"    # Another local service
 ```
+
+**Client Mode** - Connect to server:
+```toml
+[server]
+bind_ip = "127.0.0.1"
+debug = true
+
+# Reverse proxy client configuration
+[reverse_proxy_client]
+server = "server.example.com:9001"  # Server address
+
+[[reverse_proxies]]
+server = "443"              # Port exposed on server
+local = "localhost:3000"    # Your local web server
+
+[[reverse_proxies]]
+server = "22"               # Expose SSH through server
+local = "localhost:22"      # Your local SSH service
+```
+
+**Hybrid Mode** - Both server and client in single process:
+```toml
+[server]
+bind_ip = "0.0.0.0"
+debug = true
+
+# Server component
+[reverse_proxy_server]
+port = 9001
+
+# Client component (connects to local server)
+[reverse_proxy_client]
+server = "127.0.0.1:9001"
+
+[[reverse_proxies]]
+server = "8443"             # External access port
+local = "localhost:3000"    # Local web service
+```
+
+**Architecture:**
+```
+[External User] → [Hybrid Process:8443] → [Internal Tunnel:9001] → [Local Service:3000]
+```
+
+**Configuration Logic:**
+- **有 `[reverse_proxy_server]`** → 启动服务端
+- **有 `[reverse_proxy_client]`** → 启动客户端
+- **两者都有** → 自动混合模式
+- **基于配置存在性，无需复杂模式设置**
 
 ### Combined Mode
 
-Run both forward and reverse proxy at the same time:
+Run both tunnel proxy and reverse tunnel proxy at the same time:
 
 ```toml
 [server]
 bind_ip = "127.0.0.1"
+debug = true
 
-# Forward proxy rules
+# Tunnel proxy rules (port forwarding)
+[[proxies]]
+local = "5432"
+remote = "database.company.com:5432"  # Database tunneling
+
 [[proxies]]
 local = "8080"
-remote = "api.example.com:443"
+remote = "api.example.com:443"        # API tunneling
 
-# Reverse proxy rules
+# Reverse proxy server configuration
+[reverse_proxy_server]
+port = 9001
+
 [[reverse_proxies]]
-server = "8443"
-local = "localhost:3000"
-
-# Enable reverse proxy
-reverse_mode = "server"
-reverse_target = "59000"
+server = "2222"                        # Expose SSH externally
+local = "localhost:22"                 # Local SSH service
 ```
+
+**Configuration Comparison:**
+
+| Mode | Configuration | Use Case |
+|------|-------------|----------|
+| **Tunnel Proxy** | `[[proxies]]` only | Access remote databases, APIs |
+| **Reverse Server** | `[reverse_proxy_server]` + `[[reverse_proxies]]` | Expose local services to internet |
+| **Reverse Client** | `[reverse_proxy_client]` + `[[reverse_proxies]]` | Connect to remote reverse proxy |
+| **Hybrid Mode** | Both server + client configurations | Self-contained reverse proxy |
+| **Combined Mode** | `[[proxies]]` + reverse proxy configs | Maximum flexibility |
 
 ## Configuration Options
 
@@ -102,7 +176,7 @@ auth_token = "secret-token"   # Optional: Require authentication
 allowed_tokens = ["token1", "token2"]  # Optional: Multiple valid tokens
 ```
 
-### Forward Proxy Rules
+### Tunnel Proxy Rules
 
 ```toml
 [[proxies]]
@@ -114,35 +188,81 @@ source_ip = "192.168.1.100"      # Optional: Use custom source IP
 ### Reverse Proxy Rules
 
 ```toml
+# Define what ports to expose through the tunnel
 [[reverse_proxies]]
-server = "8080"                   # External port to listen on
-local = "192.168.1.100:3000"      # Local service to forward to
+server = "8080"                   # Port on server side (what external users connect to)
+local = "127.0.0.1:3000"          # Local service port (where your service runs)
 source_ip = "10.0.0.1"             # Optional: Use custom source IP
 ```
 
-### Reverse Proxy Mode
+### Reverse Proxy Configuration
 
+**Server Configuration:**
 ```toml
-# For reverse proxy server
-reverse_mode = "server"
-reverse_target = "59000"          # Control port
+[reverse_proxy_server]
+port = 9001                    # Control port for client connections
+```
 
-# For reverse proxy client
-reverse_mode = "client"
-reverse_target = "server.com:59000"  # Server address
+**Client Configuration:**
+```toml
+[reverse_proxy_client]
+server = "server.example.com:9001"  # Server address and control port
+```
+
+**Hybrid Mode** (both server and client):
+```toml
+[reverse_proxy_server]
+port = 9001
+
+[reverse_proxy_client]
+server = "127.0.0.1:9001"  # Connect to local server
+```
+
+### Architecture Overview
+
+The reverse proxy uses a **3-port architecture**:
+
+1. **Server Tunnel Port** (`reverse_proxy_server.port`) - Clients connect to server
+2. **Server Service Port** (`reverse_proxies[].server`) - External users access services
+3. **Client Local Port** (`reverse_proxies[].local`) - Where your actual service runs
+
+```
+[External User] → [Server:8080] → [Tunnel:9001] → [Client:localhost:3000]
 ```
 
 ## Common Use Cases
 
 ### 1. Expose Local Web Server
 
+**Server Configuration** (exposes port 443 to outside):
 ```toml
+[server]
+bind_ip = "0.0.0.0"
+debug = true
+
+[reverse_proxy_server]
+port = 9001
+
 [[reverse_proxies]]
-server = "443"
-local = "localhost:3000"
+server = "443"              # External port
+local = "localhost:3000"    # Your local web server
 ```
 
-### 2. Database Proxy
+**Client Configuration** (connects to server):
+```toml
+[server]
+bind_ip = "127.0.0.1"
+debug = true
+
+[reverse_proxy_client]
+server = "server.example.com:9001"
+
+[[reverse_proxies]]
+server = "443"              # Port to expose on server
+local = "localhost:3000"    # Your local web server
+```
+
+### 2. Database Tunnel
 
 ```toml
 [[proxies]]
@@ -177,6 +297,34 @@ server = "81"
 local = "order-service:3001"
 ```
 
+### 5. Hybrid Self-Contained Proxy
+
+Single process that both accepts connections and exposes local services:
+
+```toml
+[server]
+bind_ip = "0.0.0.0"
+debug = true
+
+# Server component
+[reverse_proxy_server]
+port = 9001
+
+# Client component (connects to local server)
+[reverse_proxy_client]
+server = "127.0.0.1:9001"
+
+# Expose web dashboard on port 8080
+[[reverse_proxies]]
+server = "8080"
+local = "localhost:3000"   # Web dashboard
+
+# Expose API on port 8443
+[[reverse_proxies]]
+server = "8443"
+local = "localhost:3001"   # API server
+```
+
 ## Performance
 
 - **1000+ concurrent connections**
@@ -193,12 +341,24 @@ cargo build --release
 # Run tests
 cargo test
 
-# Run comprehensive tests
-cargo test --test comprehensive_reverse_proxy_test
+# Run unit tests
+cargo test --lib
+
+# Run integration tests
+cargo test --test reverse_proxy_integration_test
 
 # Run benchmarks
 cargo bench
 ```
+
+### Project Documentation
+
+This project follows comprehensive SPEC-driven development:
+
+- **[SPEC/01-REQUIREMENTS.md](SPEC/01-REQUIREMENTS.md)**: Functional requirements and acceptance criteria
+- **[SPEC/02-ARCHITECTURE.md](SPEC/02-ARCHITECTURE.md)**: System architecture design and technical decisions
+- **[SPEC/04-API-DESIGN.md](SPEC/04-API-DESIGN.md)**: API specifications and interface definitions
+- **[SPEC/06-TESTING-STRATEGY.md](SPEC/06-TESTING-STRATEGY.md)**: Comprehensive testing strategy
 
 ## Authentication (Optional)
 
@@ -207,6 +367,7 @@ cargo bench
 ```toml
 [server]
 auth_token = "your-secret-token"
+allowed_tokens = ["token1", "token2"]
 ```
 
 ### Client Usage
@@ -227,6 +388,19 @@ auth_token = "your-secret-token"
 - Supported OS: Linux, Windows, macOS
 - Memory: 50MB minimum
 - Network: TCP/IP connectivity
+
+## Version
+
+**Current Version**: v0.8.1
+
+### Recent Changes (v0.8.1)
+
+- ✅ **Real Internet Service Testing**: Replaced mock servers with actual internet services (httpbin.org)
+- ✅ **Enhanced Test Coverage**: Comprehensive tunnel and reverse tunnel proxy tests with real services
+- ✅ **Improved Test Reliability**: Removed self-built HTTP servers for authentic testing validation
+- ✅ **Declarative Configuration**: Removed complex `reverse_mode` parameter (v0.8.0)
+- ✅ **Intuitive Setup**: Automatic mode detection based on configuration presence (v0.8.0)
+- ✅ **Simplified Hybrid Mode**: Server + client in single process (v0.8.0)
 
 ## License
 

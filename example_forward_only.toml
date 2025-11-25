@@ -1,0 +1,28 @@
+# GSC-FQ Forward Proxy Only Example
+# Port forwarding configuration
+
+[server]
+bind_ip = "127.0.0.1"
+debug = false
+
+# Forward proxy rules - redirect local ports to remote services
+[[proxies]]
+local = "8080"                           # Listen on localhost:8080
+remote = "httpbin.org:80"                # Forward to httpbin.org (HTTP testing service)
+source_ip = null                          # Use default source IP
+
+[[proxies]]
+local = "3306"                           # Listen on localhost:3306
+remote = "database.example.com:3306"     # Forward to remote MySQL database
+source_ip = "192.168.1.100"              # Use specific source IP
+
+[[proxies]]
+local = "6379"                           # Listen on localhost:6379
+remote = "redis.example.com:6379"         # Forward to Redis server
+source_ip = null                          # Use default source IP
+
+# Usage:
+# 1. Save as default.toml
+# 2. Run: ./gsc-fq
+# 3. Connect to localhost:8080 → reaches httpbin.org:80
+# 4. Connect to localhost:3306 → reaches database.example.com:3306

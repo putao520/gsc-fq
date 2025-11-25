@@ -1,0 +1,24 @@
+# GSC-FQ 混合模式示例
+# 单进程中同时运行反向代理服务端和客户端
+
+[server]
+bind_ip = "0.0.0.0"
+debug = true
+allowed_tokens = []
+
+# 反向代理服务端配置
+[reverse_proxy_server]
+port = 9001  # 控制端口
+
+# 反向代理客户端配置（连接到本地服务端）
+[reverse_proxy_client]
+server = "127.0.0.1:9001"  # 连接到本地服务端
+
+# 要通过反向代理暴露的本地服务
+[[reverse_proxies]]
+server = "8443"     # 外部访问端口
+local = "localhost:3000"  # 本地web服务器
+
+[[reverse_proxies]]
+server = "8080"     # 另一个外部端口
+local = "localhost:8080"  # 另一个本地服务

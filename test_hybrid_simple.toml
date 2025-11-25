@@ -1,0 +1,12 @@
+[server]
+bind_ip = "127.0.0.1"
+debug = true
+allowed_tokens = []
+
+reverse_mode = "hybrid"
+hybrid_server_port = 9001
+hybrid_client_target = "127.0.0.1:9001"
+
+[[reverse_proxies]]
+server = "8443"
+local = "localhost:3000"

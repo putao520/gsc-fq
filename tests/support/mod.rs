@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use gsc_fq::config::loader::{ConfigFile, ReverseProxySection, ServerSection};
+use gsc_fq::config::loader::{ConfigFile, ReverseProxySection, ServerSection, ReverseProxyClientSection};
 use gsc_fq::proxy::ProxyInstance;
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -357,8 +357,10 @@ impl ReverseProxyClientHandle {
             }),
             proxies: Vec::new(),
             reverse_proxies,
-            reverse_mode: Some("client".to_string()),
-            reverse_target: Some(server_addr.to_string()),
+            reverse_proxy_server: None,
+            reverse_proxy_client: Some(ReverseProxyClientSection {
+                server: server_addr.to_string(),
+            }),
         };
 
         let handle = tokio::spawn(async move {

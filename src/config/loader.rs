@@ -13,9 +13,12 @@ pub struct ConfigFile {
     pub proxies: Vec<ProxySection>,
     #[serde(default)]
     pub reverse_proxies: Vec<ReverseProxySection>,
-    /// Reverse proxy mode configuration
-    pub reverse_mode: Option<String>,        // "server" or "client"
-    pub reverse_target: Option<String>,      // port number for server, or address for client
+
+    // Reverse proxy server configuration (optional)
+    pub reverse_proxy_server: Option<ReverseProxyServerSection>,
+
+    // Reverse proxy client configuration (optional)
+    pub reverse_proxy_client: Option<ReverseProxyClientSection>,
 }
 
 /// Server configuration section
@@ -255,6 +258,20 @@ impl ReverseProxySection {
     }
 }
 
+/// Reverse proxy server configuration
+#[derive(Debug, Deserialize, Clone)]
+pub struct ReverseProxyServerSection {
+    /// Port for the reverse proxy server to listen on
+    pub port: u16,
+}
+
+/// Reverse proxy client configuration
+#[derive(Debug, Deserialize, Clone)]
+pub struct ReverseProxyClientSection {
+    /// Server address to connect to (e.g., "server.example.com:9001")
+    pub server: String,
+}
+
 impl ConfigFile {
     /// Validate configuration integrity and return non-fatal warnings
     pub fn validate(&mut self) -> std::result::Result<Vec<String>, ConfigError> {
@@ -266,6 +283,16 @@ impl ConfigFile {
         // 配置文件必须有代理规则（正向或反向）
         if self.proxies.is_empty() && self.reverse_proxies.is_empty() {
             errors.push("No proxy configurations found (neither proxies nor reverse_proxies)".to_string());
+        }
+
+        // 验证反向代理配置的一致性
+        if !self.reverse_proxies.is_empty() {
+            let has_server = self.reverse_proxy_server.is_some();
+            let has_client = self.reverse_proxy_client.is_some();
+
+            if !has_server && !has_client {
+                errors.push("Reverse proxies configured but neither reverse_proxy_server nor reverse_proxy_client specified".to_string());
+            }
         }
 
         if let Some(server) = self.server.as_mut() {
@@ -627,8 +654,8 @@ mod tests {
                 source_ip: Some("invalid-ip".to_string()),
             }],
             reverse_proxies: vec![],
-            reverse_mode: None,
-            reverse_target: None,
+            reverse_proxy_server: None,
+            reverse_proxy_client: None,
         };
 
         let result = config.validate();
@@ -710,8 +737,8 @@ local = "7000"
                 },
             ],
             reverse_proxies: vec![],
-            reverse_mode: None,
-            reverse_target: None,
+            reverse_proxy_server: None,
+            reverse_proxy_client: None,
         };
 
         let result = config.validate();

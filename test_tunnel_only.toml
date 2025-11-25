@@ -1,0 +1,4 @@
+# 测试隧道代理单独工作
+[[proxies]]
+local = "8080"
+remote = "httpbin.org:80"

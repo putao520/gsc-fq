@@ -124,13 +124,18 @@ impl ReverseProxyClient {
             let server_port = rproxy.get_server_port().map_err(|e| {
                 ReverseProxyError::HandshakeFailed(format!("Invalid server config: {}", e))
             })?;
+            let server_host = rproxy.get_server_ip();  // 获取服务器绑定IP
             let local_port = rproxy.get_local_port().map_err(|e| {
                 ReverseProxyError::HandshakeFailed(format!("Invalid local config: {}", e))
             })?;
             let local_host = rproxy.get_local_host().unwrap_or_else(|| "localhost".to_string());
 
+            println!("🔧 Client sending config: server_port={}, server_host={:?}, local={}:{}",
+                server_port, server_host, local_host, local_port);
+
             proxy_configs.push(ReverseProxyConfig {
                 server_port,
+                server_host,
                 local_host,
                 local_port,
             });
@@ -176,22 +181,14 @@ impl ReverseProxyClient {
     
     
     /// Run a single session (separated for cleaner code)
-    async fn run_session(&mut self, _proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
+    async fn run_session(&mut self, proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
         println!("✅ Client connected and waiting for data forwarding through reverse proxy");
 
-        // The yamux pool is already handling incoming streams in its background tasks
-        // We just need to keep the main client connection alive
-        // When the server opens streams to forward external connections,
-        // the pool's background tasks will handle them automatically
+        let pool = self.yamux_pool.as_mut()
+            .ok_or_else(|| ReverseProxyError::ConnectionFailed("Yamux pool not initialized".to_string()))?;
 
         loop {
-            // Keep the client alive and check connection health
-            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-            // Check if the pool is still active
-            let pool = self.yamux_pool.as_ref()
-                .ok_or_else(|| ReverseProxyError::ConnectionFailed("Yamux pool not initialized".to_string()))?;
-
+            // Check connection health
             let stats = pool.get_stats().await;
             debug_println!("Connection pool status: {} active connections", stats.active_connections);
 
@@ -200,6 +197,9 @@ impl ReverseProxyClient {
                     "All yamux connections have been lost".to_string()
                 ).into());
             }
+
+            // Keep the client alive and handle potential incoming streams
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
     }
 
