@@ -137,7 +137,7 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
                                 break;
                             }
                         }
-                        Ok(Err(_)) | Err(_) => break,
+                        Err(_) => break,
                     }
                 }
 

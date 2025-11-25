@@ -10,6 +10,7 @@ use gsc_fq::config::loader::ProxySection;
 use gsc_fq::proxy::ProxyServerBuilder;
 
 /// 真实互联网服务端点配置
+#[allow(dead_code)]
 struct InternetService {
     name: &'static str,
     host: &'static str,

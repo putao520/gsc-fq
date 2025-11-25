@@ -129,7 +129,6 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
                                             break;
                                         }
                                     }
-                                    Ok(Err(_)) => break,
                                     Err(_) => break,
                                 }
                             }
@@ -251,7 +250,6 @@ async fn test_tunnel_proxy_concurrent_connections() -> Result<()> {
                         Ok(Ok(_)) if response_line.starts_with("HTTP/1.1") => {
                             Ok((conn_time, true))
                         }
-                        _ => Ok((conn_time, false)),
                         _ => Ok((conn_time, false)),
                     }
                 }

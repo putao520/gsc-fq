@@ -186,7 +186,7 @@ where
 
         // Mix counter with random data for uniqueness
         nonce[..8].copy_from_slice(&counter_bytes);
-        rand::thread_rng().fill_bytes(&mut nonce[8..]);
+        rand::rng().fill_bytes(&mut nonce[8..]);
 
         nonce
     }

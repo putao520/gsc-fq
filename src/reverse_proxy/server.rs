@@ -84,21 +84,7 @@ impl ReverseProxyServer {
         }
     }
 
-    /// Handle incoming streams from yamux connection (Yamux 0.12)
-    #[allow(dead_code)]
-    async fn handle_incoming_stream(
-        _conn: &mut Connection<impl futures::AsyncRead + futures::AsyncWrite + Unpin>,
-        _proxy_configs: Vec<ReverseProxyConfig>,
-    ) -> Result<()> {
-        debug_println!("🔧 Yamux connection running for incoming stream handling (Yamux 0.12)");
-
-        // Yamux 0.12 doesn't have a direct accept_streams method for server connections
-        // We need to handle this differently
-        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-
-        Ok(())
-    }
-
+    
     /// Handle a single yamux stream (server side)
     async fn handle_server_stream(
         yamux_stream: yamux::Stream,
@@ -237,20 +223,7 @@ impl ReverseProxyServer {
         Ok(())
     }
 
-    /// Open yamux stream with retry logic (Yamux 0.12)
-    #[allow(dead_code)]
-    async fn open_yamux_stream_with_retry(
-        _conn: &mut Connection<impl futures::AsyncRead + futures::AsyncWrite + Unpin>,
-        _max_retries: usize,
-    ) -> std::result::Result<yamux::Stream, yamux::ConnectionError> {
-        // Yamux 0.12: 通过stream processing处理incoming streams，这里暂时返回错误
-        // 实际的流通过conn.into_stream()处理
-        Err(yamux::ConnectionError::Io(std::io::Error::new(
-            std::io::ErrorKind::ConnectionAborted,
-            "Direct stream opening not available in Yamux 0.12",
-        )))
-    }
-    
+        
     /// Handle client connection
     async fn handle_client(
         mut stream: TcpStream,

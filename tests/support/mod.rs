@@ -11,12 +11,15 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+#[allow(dead_code)]
 pub const LOCALHOST: &str = "127.0.0.1";
 
+#[allow(dead_code)]
 pub enum RemoteTarget {
     Socket(SocketAddr),
 }
 
+#[allow(dead_code)]
 impl RemoteTarget {
     pub fn socket(addr: SocketAddr) -> Self {
         Self::Socket(addr)
@@ -39,6 +42,7 @@ pub struct ProxyHandle {
     join_handle: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl ProxyHandle {
     pub async fn start(local_port: u16, target: RemoteTarget) -> Result<Self> {
         let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -94,6 +98,7 @@ pub struct TestServer {
     handle: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl TestServer {
     pub async fn start_echo() -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
@@ -174,6 +179,7 @@ pub async fn wait_for_port_ready(port: u16, timeout: Duration) -> io::Result<()>
     }
 }
 
+#[allow(dead_code)]
 pub fn pick_available_port() -> Result<u16> {
     // Try multiple times to get a truly available port
     for _ in 0..3 {
@@ -214,6 +220,7 @@ pub struct PingPongServer {
     handle: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl PingPongServer {
     pub async fn start() -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
@@ -300,6 +307,7 @@ pub struct ReverseProxyServerHandle {
     handle: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl ReverseProxyServerHandle {
     pub async fn start(control_port: u16) -> Result<Self> {
         let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -343,6 +351,7 @@ pub struct ReverseProxyClientHandle {
     handle: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl ReverseProxyClientHandle {
     pub async fn start(
         server_addr: SocketAddr,

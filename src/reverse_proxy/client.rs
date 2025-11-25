@@ -4,9 +4,6 @@ use crate::reverse_proxy::protocol::*;
 use crate::reverse_proxy::yamux_pool::{YamuxConnectionPool, ConnectionSelectionStrategy, DEFAULT_POOL_SIZE};
 use crate::{debug_println, error_println};
 use std::net::SocketAddr;
-use tokio::io::{copy_bidirectional, AsyncReadExt};
-use tokio::net::TcpStream;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 /// Reverse proxy client
 pub struct ReverseProxyClient {
@@ -204,74 +201,5 @@ impl ReverseProxyClient {
     }
 
     
-    /// Handle an incoming yamux stream from the server
-    #[allow(dead_code)]
-    async fn handle_incoming_stream(
-        yamux_stream: yamux::Stream,
-        proxy_configs: Vec<ReverseProxyConfig>,
-    ) -> Result<()> {
-        let mut yamux_tokio = yamux_stream.compat();
-
-        // Read port header (first 2 bytes)
-        let mut port_bytes = [0u8; 2];
-        debug_println!("Reading port header from incoming stream...");
-
-        if let Err(e) = yamux_tokio.read_exact(&mut port_bytes).await {
-            error_println!("Failed to read port header: {}", e);
-            return Err(ReverseProxyError::ConnectionFailed(
-                format!("Failed to read port header: {}", e)
-            ).into());
-        }
-
-        let server_port = u16::from_be_bytes(port_bytes);
-        debug_println!("Received incoming stream for server port {}", server_port);
-
-        // Find the corresponding local target
-        let local_target = proxy_configs.iter()
-            .find(|c| c.server_port == server_port)
-            .cloned();
-
-        let Some(target) = local_target else {
-            error_println!("Unknown server port: {}", server_port);
-            return Err(ReverseProxyError::ConnectionFailed(
-                format!("Unknown server port: {}", server_port)
-            ).into());
-        };
-
-        // Handle the stream data forwarding
-        Self::handle_stream(yamux_tokio, target).await
+        
     }
-    
-    /// Handle a single yamux stream
-    #[allow(dead_code)]
-    async fn handle_stream(
-        mut yamux_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-        target: ReverseProxyConfig,
-    ) -> Result<()> {
-        // Connect to local service
-        let local_addr = format!("{}:{}", target.local_host, target.local_port);
-        let mut local_stream = TcpStream::connect(&local_addr).await.map_err(|e| {
-            ReverseProxyError::ConnectionFailed(format!(
-                "Failed to connect to local service {}: {}",
-                local_addr, e
-            ))
-        })?;
-        
-        debug_println!("Connected to local service: {}", local_addr);
-        
-        // Bidirectional copy
-        match copy_bidirectional(&mut yamux_stream, &mut local_stream).await {
-            Ok((from_yamux, to_yamux)) => {
-                debug_println!(
-                    "Stream closed. Transferred: {} bytes from server, {} bytes to server",
-                    from_yamux, to_yamux
-                );
-            }
-            Err(e) => {
-                debug_println!("Copy error: {}", e);
-            }
-        }
-        
-        Ok(())
-    }
-}
