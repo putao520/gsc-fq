@@ -24,6 +24,7 @@ pub struct ReverseProxyServer {
 }
 
 /// Client session information
+#[allow(dead_code)]
 struct ClientSession {
     proxies: Vec<ReverseProxyConfig>,
     listeners: Vec<JoinHandle<()>>,
@@ -84,6 +85,7 @@ impl ReverseProxyServer {
     }
 
     /// Handle incoming streams from yamux connection (Yamux 0.12)
+    #[allow(dead_code)]
     async fn handle_incoming_stream(
         _conn: &mut Connection<impl futures::AsyncRead + futures::AsyncWrite + Unpin>,
         _proxy_configs: Vec<ReverseProxyConfig>,
@@ -236,6 +238,7 @@ impl ReverseProxyServer {
     }
 
     /// Open yamux stream with retry logic (Yamux 0.12)
+    #[allow(dead_code)]
     async fn open_yamux_stream_with_retry(
         _conn: &mut Connection<impl futures::AsyncRead + futures::AsyncWrite + Unpin>,
         _max_retries: usize,

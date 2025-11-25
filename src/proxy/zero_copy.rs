@@ -144,8 +144,7 @@ impl BufferPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
-
+    
     #[tokio::test]
     #[cfg(target_os = "linux")]
     async fn test_zero_copy() {

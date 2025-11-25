@@ -206,7 +206,7 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
                 let _ = stream.flush().await;
 
                 let mut reader = BufReader::new(stream);
-                let mut response = String::new();
+                let mut _response = String::new();
                 let mut buffer = String::new();
 
                 // 读取响应头

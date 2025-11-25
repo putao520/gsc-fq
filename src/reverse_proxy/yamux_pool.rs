@@ -294,7 +294,7 @@ impl YamuxConnectionPool {
                 self.connections[idx % self.pool_size].clone()
             }
             ConnectionSelectionStrategy::Random => {
-                let idx = rand::thread_rng().random_range(0..self.pool_size);
+                let idx = rand::rng().random_range(0..self.pool_size);
                 self.connections[idx].clone()
             }
             ConnectionSelectionStrategy::LeastLoaded => {

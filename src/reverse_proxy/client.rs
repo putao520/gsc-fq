@@ -76,7 +76,7 @@ impl ReverseProxyClient {
     pub async fn start(&mut self) -> Result<()> {
         let mut retry_count = 0u64;
         let mut backoff_seconds = 1u64;
-        const MIN_BACKOFF: u64 = 1;
+        #[allow(dead_code)] const MIN_BACKOFF: u64 = 1;  // Currently unused but kept for future retry logic
         const MAX_BACKOFF: u64 = 60;
         const MAX_RETRIES: u64 = 10;  // Limit retry attempts to prevent infinite loops
 
@@ -181,7 +181,7 @@ impl ReverseProxyClient {
     
     
     /// Run a single session (separated for cleaner code)
-    async fn run_session(&mut self, proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
+    async fn run_session(&mut self, _proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
         println!("✅ Client connected and waiting for data forwarding through reverse proxy");
 
         let pool = self.yamux_pool.as_mut()
@@ -205,6 +205,7 @@ impl ReverseProxyClient {
 
     
     /// Handle an incoming yamux stream from the server
+    #[allow(dead_code)]
     async fn handle_incoming_stream(
         yamux_stream: yamux::Stream,
         proxy_configs: Vec<ReverseProxyConfig>,
@@ -242,6 +243,7 @@ impl ReverseProxyClient {
     }
     
     /// Handle a single yamux stream
+    #[allow(dead_code)]
     async fn handle_stream(
         mut yamux_stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
         target: ReverseProxyConfig,

@@ -133,7 +133,7 @@ impl TestServer {
     }
 
     pub async fn shutdown(mut self) -> io::Result<()> {
-        if let Some(mut handle) = self.handle.take() {
+        if let Some(handle) = self.handle.take() {
             handle.abort();
             let _ = handle.await;
         }
@@ -279,7 +279,7 @@ impl PingPongServer {
     }
 
     pub async fn shutdown(mut self) -> io::Result<()> {
-        if let Some(mut handle) = self.handle.take() {
+        if let Some(handle) = self.handle.take() {
             handle.abort();
             let _ = handle.await;
         }

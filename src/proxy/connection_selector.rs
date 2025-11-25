@@ -110,13 +110,13 @@ impl ConnectionSelector {
         
         if total_weight == 0 {
             // 所有连接评分都是0，随机选择
-            let index = rand::thread_rng().random_range(0..pool.len());
+            let index = rand::rng().random_range(0..pool.len());
             return Some(pool.swap_remove(index));
         }
-        
+
         // 加权随机选择
-        let mut rng = rand::thread_rng();
-        let mut random_weight = rng.gen_range(0..total_weight);
+        let mut rng = rand::rng();
+        let mut random_weight = rng.random_range(0..total_weight);
         
         for (idx, score) in scores.iter().enumerate() {
             if random_weight < *score as u32 {
