@@ -144,7 +144,12 @@ impl ProxyServer {
         for (i, instance) in self.proxy_instances.iter().enumerate() {
             let status = match self.test_remote_connectivity(instance).await {
                 Ok(duration) => {
-                    format!("✅ Connected ({}ms)", duration.as_millis())
+                    // Show microseconds for sub-millisecond latencies
+                    if duration.as_millis() == 0 {
+                        format!("✅ Connected ({}μs)", duration.as_micros())
+                    } else {
+                        format!("✅ Connected ({}ms)", duration.as_millis())
+                    }
                 }
                 Err(e) => {
                     format!("❌ Failed: {}", e)
