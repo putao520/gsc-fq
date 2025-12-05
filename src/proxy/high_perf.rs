@@ -70,7 +70,7 @@ pub async fn buffered_bidirectional(client: TcpStream, server: TcpStream) -> Res
             match client_read.read(&mut buffer).await {
                 Ok(0) => break, // EOF
                 Ok(n) => {
-                    if let Err(e) = client_write.write_all(&buffer[..n]).await {
+                    if let Err(e) = server_write.write_all(&buffer[..n]).await {
                         debug_println!("Client->Server write error: {}", e);
                         break;
                     }
@@ -94,7 +94,7 @@ pub async fn buffered_bidirectional(client: TcpStream, server: TcpStream) -> Res
             match server_read.read(&mut buffer).await {
                 Ok(0) => break, // EOF
                 Ok(n) => {
-                    if let Err(e) = server_write.write_all(&buffer[..n]).await {
+                    if let Err(e) = client_write.write_all(&buffer[..n]).await {
                         debug_println!("Server->Client write error: {}", e);
                         break;
                     }
