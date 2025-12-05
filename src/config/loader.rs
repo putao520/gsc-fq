@@ -27,6 +27,7 @@ pub struct ServerSection {
     pub bind_ip: Option<String>,
     pub debug: Option<bool>,
     pub auth_token: Option<String>,        // Authentication token required for clients
+    #[serde(default)]
     pub allowed_tokens: Vec<String>,        // List of allowed tokens
 }
 
