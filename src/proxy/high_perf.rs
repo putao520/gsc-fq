@@ -122,17 +122,9 @@ pub async fn buffered_bidirectional(client: TcpStream, server: TcpStream) -> Res
 
 /// 自适应性能优化：自动选择最佳策略
 pub async fn adaptive_copy(client: TcpStream, server: TcpStream) -> Result<(u64, u64)> {
-    debug_println!("Starting adaptive copy - auto-selecting best method");
+    debug_println!("Starting adaptive copy - using optimized bidirectional forwarding");
 
-    // 优先尝试使用优化的 io::copy 实现
-    match optimized_bidirectional(client, server).await {
-        Ok(result) => Ok(result),
-        Err(e) => {
-            debug_println!("Optimized method failed: {}, trying buffered approach", e);
-            // 这里不能回退，因为流已经被消费
-            // 在实际使用中，应该根据网络条件选择策略
-            Err(e)
-        }
-    }
+    // 使用优化的 io::copy 实现，这是最稳定的转发方式
+    optimized_bidirectional(client, server).await
 }
 
