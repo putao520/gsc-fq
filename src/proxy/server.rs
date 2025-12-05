@@ -325,9 +325,16 @@ impl ProxyInstance {
 
         // Create optimized TCP listener
         let listener = self.create_optimized_listener().await?;
-        let _local_addr = listener.local_addr().map_err(|e| {
+        let local_addr = listener.local_addr().map_err(|e| {
             NetworkError::ListenFailed(format!("Failed to get local address: {}", e))
         })?;
+
+        println!(
+            "📍 Proxy listening on {} → {}",
+            local_addr,
+            self.remote_addr
+        );
+        debug_println!("Proxy instance {} started successfully", local_addr);
 
         loop {
             tokio::select! {
