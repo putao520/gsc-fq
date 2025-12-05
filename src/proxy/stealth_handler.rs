@@ -167,33 +167,62 @@ impl StealthHandler {
 
     /// Normal bidirectional forwarding
     async fn normal_forwarding(client: TcpStream, remote: TcpStream) -> Result<(), ProxyError> {
+        // Get connection addresses for debug logging
+        let client_addr = client.peer_addr().ok();
+        let remote_addr = remote.peer_addr().ok();
+
+        debug_println!(
+            "📡 Starting forwarding: {} <-> {}",
+            client_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string()),
+            remote_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string())
+        );
+
         let (mut client_read, mut client_write) = client.into_split();
         let (mut remote_read, mut remote_write) = remote.into_split();
 
-        let client_to_remote = tokio::spawn(async move {
-            match copy(&mut client_read, &mut remote_write).await {
-                Ok(bytes) => {
-                    debug_println!("Client->Remote: {} bytes", bytes);
-                }
-                Err(e) => {
-                    debug_println!("Client->Remote failed: {}", e);
-                }
-            }
-        });
+        // Format addresses for logging
+        let client_addr_str = client_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
+        let remote_addr_str = remote_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
 
-        let remote_to_client = tokio::spawn(async move {
-            match copy(&mut remote_read, &mut client_write).await {
-                Ok(bytes) => {
-                    debug_println!("Remote->Client: {} bytes", bytes);
+        let client_to_remote = {
+            let client_addr = client_addr_str.clone();
+            let remote_addr = remote_addr_str.clone();
+            tokio::spawn(async move {
+                match copy(&mut client_read, &mut remote_write).await {
+                    Ok(bytes) => {
+                        debug_println!("✅ {} → {} | {} bytes", client_addr, remote_addr, bytes);
+                    }
+                    Err(e) => {
+                        debug_println!("❌ {} → {} | {}", client_addr, remote_addr, e);
+                    }
                 }
-                Err(e) => {
-                    debug_println!("Remote->Client failed: {}", e);
+            })
+        };
+
+        let remote_to_client = {
+            let client_addr = client_addr_str.clone();
+            let remote_addr = remote_addr_str.clone();
+            tokio::spawn(async move {
+                match copy(&mut remote_read, &mut client_write).await {
+                    Ok(bytes) => {
+                        debug_println!("✅ {} ← {} | {} bytes", client_addr, remote_addr, bytes);
+                    }
+                    Err(e) => {
+                        debug_println!("❌ {} ← {} | {}", client_addr, remote_addr, e);
+                    }
                 }
-            }
-        });
+            })
+        };
 
         // Wait for both directions
         let _ = tokio::join!(client_to_remote, remote_to_client);
+
+        debug_println!(
+            "📊 Connection closed: {} ↔ {}",
+            client_addr_str,
+            remote_addr_str
+        );
+
         Ok(())
     }
 }
