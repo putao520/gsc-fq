@@ -232,8 +232,8 @@ impl ReverseProxyServer {
         auth_token: Option<String>,
         allowed_tokens: Vec<String>,
     ) -> Result<()> {
-        // Get the bind_ip from the client address
-        let bind_ip = addr.ip();
+        // Bind to all interfaces since this is a tunnel to remote clients
+        let bind_ip = std::net::Ipv4Addr::UNSPECIFIED; // 0.0.0.0
         // Read ClientHello
         let msg = ControlMessage::read_from(&mut stream).await?;
 
