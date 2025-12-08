@@ -1,6 +1,6 @@
 [package]
 name = "gsc-fq"
-version = "0.8.4"
+version = "0.8.5"
 edition = "2021"
 authors = ["putao520 <yuyao1022@hotmail.com>"]
 description = "High-performance TCP proxy with enterprise-grade encryption, TOKEN authentication, CPU hardware acceleration, and reverse proxy capabilities"
@@ -8,13 +8,22 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/putao520/gsc-fq"
 homepage = "https://github.com/putao520/gsc-fq"
 documentation = "https://docs.rs/gsc-fq"
-keywords = ["proxy", "tcp", "forwarding", "cli", "blackhole"]
+keywords = ["proxy", "tcp", "forwarding", "cli", "blackhole", "arm", "cross-compilation"]
 categories = ["network-programming", "command-line-utilities"]
 readme = "README.md"
+build = "build.rs"
 
 [dependencies]
 # 寮傛杩愯鏃?
 tokio = { version = "1.44", features = ["full"] }
+
+# Cross-compilation targets for ARM architectures
+[target.arm-unknown-linux-musleabihf]
+linker = "arm-linux-gnueabihf-gcc"
+
+[target.arm-unknown-linux-musleabihf.dependencies]
+# Same dependencies as main, but specified for ARMv7 target
+# This ensures ARMv7 builds work correctly
 
 # 閰嶇疆鏂囦欢瑙ｆ瀽
 toml = "0.8"
@@ -84,6 +93,16 @@ lto = true
 codegen-units = 1
 panic = "abort"
 opt-level = 3
+strip = true
+debug-assertions = false
+overflow-checks = false
+
+# ARMv7 specific profile optimizations
+[target.arm-unknown-linux-musleabihf.profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = "s"  # Size optimization for embedded ARM devices
 strip = true
 debug-assertions = false
 overflow-checks = false

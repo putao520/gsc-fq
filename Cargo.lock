@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "gsc-fq"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "aes-gcm-siv",
  "anyhow",

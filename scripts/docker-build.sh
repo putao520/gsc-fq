@@ -79,7 +79,7 @@ fi
 if command -v docker buildx &> /dev/null; then
     echo -e "${GREEN}🏗️  构建多架构镜像...${NC}"
     docker buildx build \
-        --platform linux/amd64,linux/arm64 \
+        --platform linux/amd64,linux/arm64,linux/armv7 \
         --file "Dockerfile" \
         --tag "${REGISTRY}/gsc-fq:${VERSION}" \
         --build-arg RUST_VERSION="${RUST_VERSION}" \
