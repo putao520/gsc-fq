@@ -203,12 +203,15 @@ impl YamuxConnectionPool {
     /// 创建优化的TCP连接
     async fn create_optimized_tcp(addr: SocketAddr) -> Result<TcpStream> {
         let socket = TcpSocket::new_v4()?;
-        
+
         // TCP优化 - 关键性能提升
         socket.set_nodelay(true)?;  // 禁用Nagle算法
         socket.set_recv_buffer_size(4 * 1024 * 1024)?;  // 4MB接收缓冲
         socket.set_send_buffer_size(4 * 1024 * 1024)?;  // 4MB发送缓冲
-        
+
+        // 启用TCP keepalive - 防止网络中间设备断开空闲连接
+        socket.set_keepalive(true)?;
+
         // 连接超时
         let stream = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -218,7 +221,10 @@ impl YamuxConnectionPool {
         .map_err(|_| crate::error::ReverseProxyError::ConnectionFailed(
             "连接超时".to_string()
         ))??;
-        
+
+        // 进一步配置已连接的socket的keepalive参数
+        // 注意：在某些系统上，这可能需要原生socket操作，set_keepalive已经是对socket的标准配置
+
         Ok(stream)
     }
     

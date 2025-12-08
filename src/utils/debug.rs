@@ -37,6 +37,14 @@ macro_rules! error_println {
     };
 }
 
+/// 警告输出宏 - 始终输出（警告信息不应该被禁用）
+#[macro_export]
+macro_rules! warning_println {
+    ($($arg:tt)*) => {
+        eprintln!($($arg)*);
+    };
+}
+
 /// 调试格式化输出宏
 #[macro_export]
 macro_rules! debug_print {

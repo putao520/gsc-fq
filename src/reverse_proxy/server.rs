@@ -6,10 +6,11 @@ use sha2::Digest;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::interval;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use yamux::{Config, Connection, Mode};
 
@@ -216,6 +217,152 @@ impl ReverseProxyServer {
             Err(e) => {
                 debug_println!("Copy error: {}", e);
             }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a single yamux stream with activity update to prevent cleanup
+    async fn handle_server_stream_with_activity_update(
+        yamux_stream: yamux::Stream,
+        client_id: &ClientId,
+        clients: &Arc<Mutex<HashMap<ClientId, ClientSession>>>,
+        proxy_configs: Vec<ReverseProxyConfig>,
+    ) -> Result<()> {
+        use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+        let mut compat_stream = yamux_stream.compat();
+
+        // Read port header (first 2 bytes)
+        let mut port_bytes = [0u8; 2];
+        debug_println!("Reading port header from incoming stream...");
+
+        if let Err(e) = compat_stream.read_exact(&mut port_bytes).await {
+            error_println!("Failed to read port header: {}", e);
+            return Err(crate::error::ReverseProxyError::ConnectionFailed(
+                format!("Failed to read port header: {}", e)
+            ).into());
+        }
+
+        let server_port = u16::from_be_bytes(port_bytes);
+        debug_println!("Received incoming stream for server port {}", server_port);
+
+        // Find the corresponding local target
+        let local_target = proxy_configs.iter()
+            .find(|c| c.server_port == server_port)
+            .cloned();
+
+        let Some(target) = local_target else {
+            error_println!("Unknown server port: {}", server_port);
+            return Err(crate::error::ReverseProxyError::ConnectionFailed(
+                format!("Unknown server port: {}", server_port)
+            ).into());
+        };
+
+        // Handle the stream data forwarding with periodic activity updates
+        Self::handle_stream_forwarding_with_activity_update(compat_stream, target, client_id, clients).await
+    }
+
+    /// Handle the stream data forwarding with periodic activity updates
+    async fn handle_stream_forwarding_with_activity_update(
+        mut yamux_stream: tokio_util::compat::Compat<yamux::Stream>,
+        target: ReverseProxyConfig,
+        client_id: &ClientId,
+        clients: &Arc<Mutex<HashMap<ClientId, ClientSession>>>,
+    ) -> Result<()> {
+        // Connect to local service
+        let local_addr = format!("{}:{}", target.local_host, target.local_port);
+        let mut local_stream = TcpStream::connect(&local_addr).await.map_err(|e| {
+            crate::error::ReverseProxyError::ConnectionFailed(format!(
+                "Failed to connect to local service {}: {}",
+                local_addr, e
+            ))
+        })?;
+
+        debug_println!("Connected to local service: {}", local_addr);
+
+        // Create activity update interval (update every 30 seconds during long transfers)
+        let mut activity_interval = interval(std::time::Duration::from_secs(30));
+        let mut data_transfer_started = false;
+
+        // Read data with periodic activity updates
+        let mut read_buffer = [0u8; 1024];
+        let mut write_buffer = [0u8; 1024];
+        loop {
+            tokio::select! {
+                // Update activity periodically
+                _ = activity_interval.tick() => {
+                    debug_println!("🔄 Updating activity for client {} during data transfer", client_id);
+                    let mut clients_lock = clients.lock().await;
+                    if let Some(session) = clients_lock.get_mut(client_id) {
+                        session.update_activity();
+                    }
+                }
+
+                // Read data from Yamux
+                result = yamux_stream.read(&mut read_buffer) => {
+                    match result {
+                        Ok(0) => {
+                            // EOF - connection closed
+                            debug_println!("📥 Connection closed for client {}", client_id);
+                            break;
+                        }
+                        Ok(n) => {
+                            if !data_transfer_started {
+                                debug_println!("📥 Starting data transfer for client {} ({} bytes)", client_id, n);
+                                data_transfer_started = true;
+                                // Update activity when data transfer starts
+                                let mut clients_lock = clients.lock().await;
+                                if let Some(session) = clients_lock.get_mut(client_id) {
+                                    session.update_activity();
+                                }
+                            }
+                            // Forward data to local stream
+                            if let Err(e) = local_stream.write_all(&read_buffer[..n]).await {
+                                debug_println!("Write error to local stream: {}", e);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            debug_println!("Read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Write data from local to Yamux
+                result = local_stream.read(&mut write_buffer) => {
+                    match result {
+                        Ok(0) => {
+                            // EOF - connection closed
+                            debug_println!("📥 Local connection closed for client {}", client_id);
+                            break;
+                        }
+                        Ok(n) => {
+                            // Forward data to Yamux stream
+                            if let Err(e) = yamux_stream.write_all(&write_buffer[..n]).await {
+                                debug_println!("Write error to Yamux stream: {}", e);
+                                break;
+                            }
+                            if let Err(e) = yamux_stream.flush().await {
+                                debug_println!("Flush error: {}", e);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            debug_println!("Local read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Final activity update when stream ends
+        debug_println!("🔚 Data transfer completed for client {}", client_id);
+        let mut clients_lock = clients.lock().await;
+        if let Some(session) = clients_lock.get_mut(client_id) {
+            session.update_activity();
         }
 
         Ok(())
@@ -483,8 +630,13 @@ impl ReverseProxyServer {
                         }
                     }
                     // Handle the stream with the stored proxy configs
-                    if let Err(e) = Self::handle_server_stream(stream, proxy_configs.clone()).await {
-                        error_println!("❌ Failed to handle server stream: {}", e);
+                    match Self::handle_server_stream_with_activity_update(stream, &client_id, &clients, proxy_configs.clone()).await {
+                        Ok(()) => {
+                            debug_println!("✅ Stream handled successfully for client {}", client_id);
+                        }
+                        Err(e) => {
+                            error_println!("❌ Failed to handle server stream: {}", e);
+                        }
                     }
                 }
                 Some(Err(e)) => {

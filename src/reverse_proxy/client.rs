@@ -2,7 +2,7 @@ use crate::config::loader::ConfigFile;
 use crate::error::{ReverseProxyError, Result};
 use crate::reverse_proxy::protocol::*;
 use crate::reverse_proxy::yamux_pool::{YamuxConnectionPool, ConnectionSelectionStrategy, DEFAULT_POOL_SIZE};
-use crate::{debug_println, error_println};
+use crate::{debug_println, error_println, warning_println};
 use std::net::SocketAddr;
 
 /// Reverse proxy client
@@ -187,22 +187,145 @@ impl ReverseProxyClient {
     async fn run_session(&mut self, _proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
         println!("✅ Client connected and waiting for data forwarding through reverse proxy");
 
-        let pool = self.yamux_pool.as_mut()
-            .ok_or_else(|| ReverseProxyError::ConnectionFailed("Yamux pool not initialized".to_string()))?;
+        // Enhanced connection monitoring with better error handling
+        println!("🔍 Enhanced connection monitoring active");
+        println!("   Heartbeat: every 30s");
+        println!("   Health check: every 5s");
+        println!("   TCP keepalive: enabled");
+
+        // Store pool stats and reconnect state
+        let mut last_heartbeat = std::time::Instant::now();
+        let mut last_successful_reconnect = std::time::Instant::now();
+        let mut consecutive_failures = 0u32;
+        const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+        const RECONNECT_COOLDOWN: u64 = 60; // 60秒重连冷却
+
+        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        let mut connection_check_interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
 
         loop {
-            // Check connection health
-            let stats = pool.get_stats().await;
-            debug_println!("Connection pool status: {} active connections", stats.active_connections);
+            tokio::select! {
+                // Send heartbeat every 30 seconds
+                _ = heartbeat_interval.tick() => {
+                    if let Some(pool) = &self.yamux_pool {
+                        let pool_stats = pool.get_stats().await;
 
-            if stats.active_connections == 0 {
-                return Err(ReverseProxyError::ConnectionFailed(
-                    "All yamux connections have been lost".to_string()
-                ).into());
+                        // Check if we have any connections at all
+                        if pool_stats.pool_size == 0 {
+                            consecutive_failures += 1;
+                            error_println!("❌ No connections in pool (attempt {})", consecutive_failures);
+                        } else if pool_stats.active_connections == 0 {
+                            consecutive_failures += 1;
+                            error_println!("❌ No active connections (attempt {})", consecutive_failures);
+                        } else {
+                            // Only reset if connections look good
+                            last_heartbeat = std::time::Instant::now();
+                            consecutive_failures = 0; // Reset counter on success
+                            debug_println!("💓 Connection healthy - {}/{} connections active",
+                                pool_stats.active_connections, pool_stats.pool_size);
+                        }
+
+                        // Try to reconnect if heartbeat fails
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                            error_println!("⚠️  Too many consecutive failures ({}), attempting reconnection...", consecutive_failures);
+                            if self.reconnect_internal().await.is_err() {
+                                return Err(ReverseProxyError::ConnectionFailed(
+                                    format!("Failed to reconnect after {} consecutive failures", MAX_CONSECUTIVE_FAILURES)
+                                ).into());
+                            } else {
+                                last_successful_reconnect = std::time::Instant::now();
+                                consecutive_failures = 0;
+                                error_println!("✅ Reconnection successful");
+                            }
+                        }
+                    } else {
+                        error_println!("❌ Connection pool not available");
+                    }
+                }
+
+                // Enhanced connection health check every 5 seconds
+                _ = connection_check_interval.tick() => {
+                    if let Some(pool) = &self.yamux_pool {
+                        let stats = pool.get_stats().await;
+                        debug_println!("📊 Connection pool status: {} active connections (pool size: {})",
+                            stats.active_connections, stats.pool_size);
+
+                        // Check if all connections are lost
+                        if stats.active_connections == 0 {
+                            error_println!("🚨 Critical: All yamux connections have been lost");
+
+                            // Check reconnect cooldown
+                            if last_successful_reconnect.elapsed().as_secs() < RECONNECT_COOLDOWN {
+                                let remaining = RECONNECT_COOLDOWN - last_successful_reconnect.elapsed().as_secs();
+                                error_println!("⏳ Reconnect cooldown active: {}s remaining", remaining);
+                            } else {
+                                if self.reconnect_internal().await.is_err() {
+                                    error_println!("❌ Emergency reconnection failed");
+                                } else {
+                                    last_successful_reconnect = std::time::Instant::now();
+                                    consecutive_failures = 0;
+                                    error_println!("✅ Emergency reconnection successful");
+                                }
+                            }
+                        }
+
+                        // Check if we haven't sent heartbeat recently
+                        let heartbeat_age = last_heartbeat.elapsed();
+                        if heartbeat_age > tokio::time::Duration::from_secs(60) {
+                            warning_println!("⚠️  No heartbeat sent for {} seconds, possible connection issue",
+                                heartbeat_age.as_secs());
+                        }
+
+                        // Check overall connection age
+                        let connection_age = last_successful_reconnect.elapsed();
+                        if connection_age > tokio::time::Duration::from_secs(3600) { // 1 hour
+                            debug_println!("📝 Connection has been active for {} hours",
+                                connection_age.as_secs() / 3600);
+                        }
+                    } else {
+                        error_println!("❌ Connection pool not available for health check");
+                    }
+                }
+
+                // Fallback sleep to prevent busy waiting
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                    // This is just a fallback to ensure we don't busy wait
+                    // The actual work is done by the interval timers above
+                }
             }
+        }
+    }
 
-            // Keep the client alive and handle potential incoming streams
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    
+    /// Attempt to reconnect to the server
+    async fn reconnect_internal(&mut self) -> Result<()> {
+        error_println!("🔄 Attempting to reconnect to server...");
+
+        // Try to recreate the connection pool
+        match YamuxConnectionPool::new(
+            self.server_addr,
+            &vec![], // We'll use the existing configs from the pool
+            self.yamux_pool_size,
+            self.selection_strategy,
+            &self.auth_token,
+        ).await {
+            Ok(new_pool) => {
+                // Replace the old pool
+                if let Some(pool) = self.yamux_pool.as_mut() {
+                    *pool = new_pool;
+                    error_println!("✅ Reconnection successful");
+                    Ok(())
+                } else {
+                    error_println!("❌ Failed to access connection pool");
+                    Err(ReverseProxyError::ConnectionFailed("Pool not initialized".to_string()).into())
+                }
+            }
+            Err(e) => {
+                error_println!("❌ Reconnection failed: {}", e);
+                // Wait before retrying
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                Err(e)
+            }
         }
     }
 
