@@ -21,6 +21,62 @@ pub struct ReverseProxyServer {
     clients: Arc<Mutex<HashMap<ClientId, ClientSession>>>,
     auth_token: Option<String>,
     allowed_tokens: Vec<String>,
+    cleanup_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ReverseProxyServer {
+    /// Create new reverse proxy server
+    pub fn new(bind_ip: std::net::IpAddr, control_port: u16) -> Self {
+        let control_addr = SocketAddr::new(bind_ip, control_port);
+        let clients = Arc::new(Mutex::new(HashMap::new()));
+
+        // Start cleanup task
+        let cleanup_task = Self::start_cleanup_task(clients.clone());
+
+        Self {
+            control_addr,
+            clients,
+            auth_token: std::env::var("REVERSE_PROXY_TOKEN").ok(),
+            allowed_tokens: Vec::new(),
+            cleanup_task: Some(cleanup_task),
+        }
+    }
+
+    /// Start background cleanup task for inactive clients
+    fn start_cleanup_task(clients: Arc<Mutex<HashMap<ClientId, ClientSession>>>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+
+            loop {
+                interval.tick().await;
+
+                let mut clients_guard = clients.lock().await;
+                let now = std::time::Instant::now();
+
+                // Remove clients that have been inactive for more than 5 minutes
+                let to_remove: Vec<ClientId> = clients_guard.iter()
+                    .filter(|(_, session)| now.duration_since(session.last_activity) > std::time::Duration::from_secs(300))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+
+                let removed_count = to_remove.len();
+                for client_id in to_remove {
+                    debug_println!("🧹 Cleaning up inactive client: {}", client_id);
+                    let session = clients_guard.remove(&client_id);
+                    if let Some(session) = session {
+                        // Abort all listener handles
+                        for handle in session.listeners {
+                            handle.abort();
+                        }
+                    }
+                }
+
+                if removed_count > 0 {
+                    debug_println!("🧹 Cleaned up {} inactive clients", removed_count);
+                }
+            }
+        })
+    }
 }
 
 /// Client session information
@@ -28,20 +84,24 @@ pub struct ReverseProxyServer {
 struct ClientSession {
     proxies: Vec<ReverseProxyConfig>,
     listeners: Vec<JoinHandle<()>>,
+    last_activity: std::time::Instant,
 }
 
-impl ReverseProxyServer {
-    /// Create new reverse proxy server
-    pub fn new(bind_ip: std::net::IpAddr, control_port: u16) -> Self {
-        let control_addr = SocketAddr::new(bind_ip, control_port);
+impl ClientSession {
+    fn new(proxies: Vec<ReverseProxyConfig>, listeners: Vec<JoinHandle<()>>) -> Self {
         Self {
-            control_addr,
-            clients: Arc::new(Mutex::new(HashMap::new())),
-            auth_token: std::env::var("REVERSE_PROXY_TOKEN").ok(),
-            allowed_tokens: Vec::new(),
+            proxies,
+            listeners,
+            last_activity: std::time::Instant::now(),
         }
     }
 
+    fn update_activity(&mut self) {
+        self.last_activity = std::time::Instant::now();
+    }
+}
+
+impl ReverseProxyServer {
     /// Create new reverse proxy server with authentication
     pub fn new_with_auth(
         bind_ip: std::net::IpAddr,
@@ -50,14 +110,19 @@ impl ReverseProxyServer {
         allowed_tokens: Vec<String>
     ) -> Self {
         let control_addr = SocketAddr::new(bind_ip, control_port);
+        let clients = Arc::new(Mutex::new(HashMap::new()));
+
+        // Start cleanup task
+        let cleanup_task = Self::start_cleanup_task(clients.clone());
+
         Self {
             control_addr,
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            clients,
             auth_token,
             allowed_tokens,
+            cleanup_task: Some(cleanup_task),
         }
     }
-    
     /// Start the reverse proxy server
     pub async fn start(&mut self) -> Result<()> {
         let listener = TcpListener::bind(self.control_addr).await?;
@@ -390,10 +455,10 @@ impl ReverseProxyServer {
         // Store client session with listener handles
         {
             let mut clients_lock = clients.lock().await;
-            clients_lock.insert(client_id.clone(), ClientSession {
-                proxies: proxy_configs_clone,
-                listeners: listener_handles,
-            });
+            clients_lock.insert(client_id.clone(), ClientSession::new(
+                proxy_configs_clone,
+                listener_handles,
+            ));
         }
 
         debug_println!("🔧 Server ready - {} proxy ports bound and listening", proxy_configs.len());
@@ -410,6 +475,13 @@ impl ReverseProxyServer {
             match poll_fn(|cx| conn.poll_next_inbound(cx)).await {
                 Some(Ok(stream)) => {
                     debug_println!("🔧 Server received new Yamux stream from client {}", client_id);
+                    // Update client activity
+                    {
+                        let mut clients_lock = clients.lock().await;
+                        if let Some(session) = clients_lock.get_mut(&client_id) {
+                            session.update_activity();
+                        }
+                    }
                     // Handle the stream with the stored proxy configs
                     if let Err(e) = Self::handle_server_stream(stream, proxy_configs.clone()).await {
                         error_println!("❌ Failed to handle server stream: {}", e);
@@ -421,19 +493,21 @@ impl ReverseProxyServer {
                 }
                 None => {
                     debug_println!("🔧 Server control connection closed for client {}", client_id);
+                    // Update activity one last time before disconnecting
+                    {
+                        let mut clients_lock = clients.lock().await;
+                        if let Some(session) = clients_lock.get_mut(&client_id) {
+                            session.update_activity();
+                        }
+                    }
                     break;
                 }
             }
         }
 
-        // Cleanup
-        {
-            let mut clients_lock = clients.lock().await;
-            clients_lock.remove(&client_id);
-        }
-        
-        println!("❌ Client {} disconnected", addr);
-        
+        // Don't remove the client session here - it will be cleaned up by the background task
+        debug_println!("🔧 Client {} disconnected, proxy listeners will remain active until timeout", addr);
+
         Ok(())
     }
 }
