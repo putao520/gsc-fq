@@ -82,7 +82,12 @@ async fn main() -> Result<()> {
             .and_then(|ip| ip.parse().ok())
             .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
 
-        let mut reverse_server = ReverseProxyServer::new(bind_ip, server_config.port);
+        let mut reverse_server = ReverseProxyServer::new_with_auth(
+            bind_ip,
+            server_config.port,
+            None,  // No single auth token, using allowed_tokens
+            server_config.allowed_tokens.clone()
+        );
         tasks.push(tokio::spawn(async move {
             if let Err(e) = reverse_server.start().await {
                 eprintln!("❌ Reverse proxy server failed: {}", e);

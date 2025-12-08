@@ -31,8 +31,14 @@ impl ReverseProxyClient {
             .ok()
             .or_else(|| {
                 // 从配置文件读取token（如果指定）
-                config.server.as_ref()
-                    .and_then(|s| s.auth_token.clone())
+                config.reverse_proxy_server.as_ref()
+                    .and_then(|s| {
+                        if !s.allowed_tokens.is_empty() {
+                            Some(s.allowed_tokens[0].clone())
+                        } else {
+                            None
+                        }
+                    })
             });
 
         // 从环境变量或配置读取pool_size，默认32

@@ -32,6 +32,11 @@ remote = "example.com:80"
 [[proxies]]
 local = "5432"
 remote = "db.example.com:5432"
+
+# Reverse proxy server configuration with authentication tokens
+[reverse_proxy_server]
+port = 9001
+allowed_tokens = ["token1", "token2", "token3"]
 ```
 
 2. **Run the proxy:**
@@ -65,9 +70,10 @@ Expose your local services through a tunnel with simple, intuitive configuration
 bind_ip = "0.0.0.0"
 debug = true
 
-# Reverse proxy server configuration
+# Reverse proxy server configuration with authentication tokens
 [reverse_proxy_server]
 port = 9001  # Control port for clients
+allowed_tokens = ["token1", "token2"]  # Authentication tokens for clients
 
 [[reverse_proxies]]
 server = "443"              # Port exposed on server
@@ -103,9 +109,10 @@ local = "localhost:22"      # Your local SSH service
 bind_ip = "0.0.0.0"
 debug = true
 
-# Server component
+# Server component with authentication
 [reverse_proxy_server]
 port = 9001
+allowed_tokens = ["secure-token"]
 
 # Client component (connects to local server)
 [reverse_proxy_client]
@@ -145,9 +152,10 @@ remote = "database.company.com:5432"  # Database tunneling
 local = "8080"
 remote = "api.example.com:443"        # API tunneling
 
-# Reverse proxy server configuration
+# Reverse proxy server configuration with authentication
 [reverse_proxy_server]
 port = 9001
+allowed_tokens = ["token1", "token2"]
 
 [[reverse_proxies]]
 server = "2222"                        # Expose SSH externally
@@ -172,8 +180,14 @@ local = "localhost:22"                 # Local SSH service
 [server]
 bind_ip = "127.0.0.1"        # IP to bind to
 debug = true                  # Enable debug logging
-auth_token = "secret-token"   # Optional: Require authentication
-allowed_tokens = ["token1", "token2"]  # Optional: Multiple valid tokens
+```
+
+### Reverse Proxy Server Settings
+
+```toml
+[reverse_proxy_server]
+port = 9001                    # Control port for client connections
+allowed_tokens = ["token1", "token2"]  # Optional: Authentication tokens for clients
 ```
 
 ### Tunnel Proxy Rules
@@ -242,6 +256,7 @@ debug = true
 
 [reverse_proxy_server]
 port = 9001
+allowed_tokens = ["secure-token"]
 
 [[reverse_proxies]]
 server = "443"              # External port
@@ -288,6 +303,10 @@ remote = "staging-db.company.com:5432"
 [server]
 bind_ip = "0.0.0.0"
 
+[reverse_proxy_server]
+port = 9001
+allowed_tokens = ["api-gateway-token"]
+
 [[reverse_proxies]]
 server = "80"
 local = "user-service:3000"
@@ -306,9 +325,10 @@ Single process that both accepts connections and exposes local services:
 bind_ip = "0.0.0.0"
 debug = true
 
-# Server component
+# Server component with authentication
 [reverse_proxy_server]
 port = 9001
+allowed_tokens = ["hybrid-token"]
 
 # Client component (connects to local server)
 [reverse_proxy_client]
@@ -364,22 +384,25 @@ This project follows comprehensive SPEC-driven development:
 
 ### Server Configuration
 
+Authentication tokens for reverse proxy are configured in the `[reverse_proxy_server]` section:
+
 ```toml
-[server]
-auth_token = "your-secret-token"
-allowed_tokens = ["token1", "token2"]
+[reverse_proxy_server]
+port = 9001
+allowed_tokens = ["token1", "token2", "token3"]
 ```
 
 ### Client Usage
 
 ```bash
 # Method 1: Environment variable
-export REVERSE_PROXY_TOKEN="your-secret-token"
+export REVERSE_PROXY_TOKEN="token1"
 ./gsc-fq
 
-# Method 2: Config file
-[server]
-auth_token = "your-secret-token"
+# Method 2: Config file (token will be taken from first allowed_tokens entry)
+[reverse_proxy_server]
+port = 9001
+allowed_tokens = ["token1", "token2", "token3"]
 ```
 
 ## Requirements

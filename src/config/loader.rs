@@ -26,40 +26,11 @@ pub struct ConfigFile {
 pub struct ServerSection {
     pub bind_ip: Option<String>,
     pub debug: Option<bool>,
-    pub auth_token: Option<String>,        // Authentication token required for clients
-    #[serde(default)]
-    pub allowed_tokens: Vec<String>,        // List of allowed tokens
 }
 
 impl ServerSection {
-    /// Check if a token is valid
-    pub fn is_token_valid(&self, token: &str) -> bool {
-        // If no auth_token is specified, allow any token (development mode)
-        if self.auth_token.is_none() && self.allowed_tokens.is_empty() {
-            return true;
-        }
-
-        // Check against specific token
-        if let Some(ref required_token) = self.auth_token {
-            if token == required_token {
-                return true;
-            }
-        }
-
-        // Check against allowed tokens list
-        self.allowed_tokens.contains(&token.to_string())
-    }
-
-    /// Get authentication mode
-    pub fn auth_mode(&self) -> AuthMode {
-        if self.auth_token.is_some() {
-            AuthMode::Single
-        } else if !self.allowed_tokens.is_empty() {
-            AuthMode::Multiple
-        } else {
-            AuthMode::None
-        }
-    }
+    // Server section no longer handles authentication tokens
+    // Authentication for reverse proxy is now handled in reverse_proxy_server section
 }
 
 /// Authentication mode for server
@@ -75,8 +46,6 @@ impl Default for ServerSection {
         Self {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(false),
-            auth_token: None,
-            allowed_tokens: Vec::new(),
         }
     }
 }
@@ -264,6 +233,17 @@ impl ReverseProxySection {
 pub struct ReverseProxyServerSection {
     /// Port for the reverse proxy server to listen on
     pub port: u16,
+    #[serde(default)]
+    pub allowed_tokens: Vec<String>,        // Authentication tokens for reverse proxy clients
+}
+
+impl Default for ReverseProxyServerSection {
+    fn default() -> Self {
+        Self {
+            port: 9001,
+            allowed_tokens: Vec::new(),
+        }
+    }
 }
 
 /// Reverse proxy client configuration
