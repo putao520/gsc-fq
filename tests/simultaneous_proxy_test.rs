@@ -9,7 +9,7 @@ use support::{
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use std::time::Duration;
-use gsc_fq::config::loader::{ConfigFile, ServerSection};
+use gsc_fq::config::loader::{ConfigFile, ServerSection, ReverseProxyServerSection};
 
 /// 测试正向代理与反向代理同时工作
 ///
@@ -44,8 +44,6 @@ async fn test_simultaneous_forward_and_reverse_proxy() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
-            auth_token: Some("test-token".to_string()),
-            allowed_tokens: vec!["test-token".to_string()],
         }),
 
         // 正向代理配置：从 forward_proxy_port 转发到目标服务器
@@ -66,8 +64,11 @@ async fn test_simultaneous_forward_and_reverse_proxy() -> Result<()> {
             }
         ],
 
-        reverse_mode: Some("server".to_string()),
-        reverse_target: Some(reverse_control_port.to_string()),
+        reverse_proxy_server: Some(ReverseProxyServerSection {
+            port: reverse_control_port,
+            allowed_tokens: vec!["test-token".to_string()],
+        }),
+        reverse_proxy_client: None,
     };
 
     println!("🔧 配置创建完成:");
@@ -280,8 +281,6 @@ async fn test_multiple_proxy_configurations() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
-            auth_token: Some("multi-test-token".to_string()),
-            allowed_tokens: vec!["multi-test-token".to_string()],
         }),
 
         proxies: forward_ports.iter().zip(target_ports[0..2].iter()).map(|(&local_port, &target_port)| {
@@ -300,8 +299,11 @@ async fn test_multiple_proxy_configurations() -> Result<()> {
             }
         }).collect(),
 
-        reverse_mode: Some("server".to_string()),
-        reverse_target: Some(reverse_control_port.to_string()),
+        reverse_proxy_server: Some(ReverseProxyServerSection {
+            port: reverse_control_port,
+            allowed_tokens: vec!["multi-test-token".to_string()],
+        }),
+        reverse_proxy_client: None,
     };
 
     // 验证配置

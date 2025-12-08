@@ -41,8 +41,6 @@ async fn test_combined_tunnel_and_reverse_proxy() -> Result<()> {
         server: Some(gsc_fq::config::loader::ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(false),
-            auth_token: None,
-            allowed_tokens: vec![],
         }),
         proxies: vec![
             gsc_fq::config::loader::ProxySection {
@@ -52,8 +50,8 @@ async fn test_combined_tunnel_and_reverse_proxy() -> Result<()> {
             }
         ],
         reverse_proxies: vec![],
-        reverse_mode: None,
-        reverse_target: None,
+        reverse_proxy_server: None,
+        reverse_proxy_client: None,
     };
 
     let tunnel_handle = tokio::spawn(async move {
@@ -96,8 +94,10 @@ async fn test_combined_tunnel_and_reverse_proxy() -> Result<()> {
                 source_ip: None,
             }
         ],
-        reverse_mode: Some("client".to_string()),
-        reverse_target: Some(format!("127.0.0.1:{}", reverse_server_port)),
+        reverse_proxy_server: None,
+        reverse_proxy_client: Some(gsc_fq::config::loader::ReverseProxyClientSection {
+            server: format!("127.0.0.1:{}", reverse_server_port),
+        }),
     };
 
     let reverse_client_handle = tokio::spawn(async move {

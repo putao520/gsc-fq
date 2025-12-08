@@ -10,7 +10,6 @@ use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio::time;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use yamux::{Config, Connection, Mode};
 
@@ -358,22 +357,18 @@ impl ReverseProxyServer {
                         debug_println!("✅ Proxy port {} bound and listening", port);
                         // Accept connections on this port
                         loop {
-                            // Use a timeout to allow graceful shutdown
-                            match time::timeout(std::time::Duration::from_secs(5), listener.accept()).await {
-                                Ok(Ok((stream, peer_addr))) => {
+                            match listener.accept().await {
+                                Ok((stream, peer_addr)) => {
                                     debug_println!("🔧 New proxy connection from {} on port {}", peer_addr, port);
                                     // Handle the proxy connection
                                     if let Err(e) = Self::handle_direct_tcp_connection(stream, configs_for_listener.clone()).await {
                                         error_println!("❌ Failed to handle direct TCP connection: {}", e);
                                     }
                                 }
-                                Ok(Err(e)) => {
-                                    error_println!("❌ Failed to accept connection on port {}: {}", port, e);
-                                    break;
-                                }
-                                Err(_) => {
-                                    // Timeout occurred - check if we should still be listening
-                                    // This allows the task to exit when the client disconnects
+                                Err(e) => {
+                                    // Accept failed - this usually means the listener was dropped
+                                    // or the client disconnected. We should exit gracefully.
+                                    error_println!("❌ Listener for port {} closed: {}", port, e);
                                     break;
                                 }
                             }

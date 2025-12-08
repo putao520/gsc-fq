@@ -361,8 +361,6 @@ impl ReverseProxyClientHandle {
             server: Some(ServerSection {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(false),
-                auth_token: None,
-                allowed_tokens: Vec::new(),
             }),
             proxies: Vec::new(),
             reverse_proxies,

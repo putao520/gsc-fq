@@ -9,7 +9,7 @@ use gsc_fq::reverse_proxy::{
     server::ReverseProxyServer,
     client::ReverseProxyClient,
 };
-use gsc_fq::config::loader::ReverseProxySection;
+use gsc_fq::config::loader::{ReverseProxySection, ReverseProxyServerSection, ReverseProxyClientSection};
 use gsc_fq::config::ConfigFile;
 
 mod support;
@@ -40,9 +40,6 @@ async fn allocate_port() -> Result<u16, Box<dyn std::error::Error>> {
 async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 Debug: Testing Yamux Stream Handling");
 
-    // Set environment variable for authentication
-    std::env::set_var("REVERSE_PROXY_TOKEN", "debug-token");
-
     // Start PingPong server
     let pingpong_server = PingPongServer::start().await?;
     let pingpong_addr = pingpong_server.addr();
@@ -65,11 +62,19 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create config file for client
     let config = ConfigFile {
-        server: None, // No server config needed for client
+        server: Some(gsc_fq::config::loader::ServerSection {
+            bind_ip: Some("127.0.0.1".to_string()),
+            debug: Some(true),
+        }),
         proxies: vec![],
         reverse_proxies: reverse_proxy_config, // ✅ 正确传递配置
-        reverse_mode: Some("client".to_string()),
-        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
+        reverse_proxy_server: Some(ReverseProxyServerSection {
+            port: control_port,
+            allowed_tokens: vec![], // No tokens for testing
+        }),
+        reverse_proxy_client: Some(ReverseProxyClientSection {
+            server: format!("127.0.0.1:{}", control_port),
+        }),
     };
     let mut server = ReverseProxyServer::new("127.0.0.1".parse()?, control_port);
     let server_handle = server.start();
@@ -81,13 +86,17 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start reverse proxy client
     let mut client = ReverseProxyClient::new(format!("127.0.0.1:{}", control_port).parse()?, config);
-    let client_handle = client.start();
+    let client_handle = tokio::spawn(async move {
+        if let Err(e) = client.start().await {
+            eprintln!("❌ Client error: {}", e);
+        }
+    });
 
     println!("   ✅ Reverse proxy client started");
 
     // Give client time to connect and establish yamux
     println!("   ⏳ Waiting for client to connect and establish yamux...");
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Check if the external port is actually listening
     println!("   🔍 Checking if proxy port {} is listening...", external_port);
@@ -157,6 +166,7 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
 
     // Cleanup
     println!("   🧹 Cleaning up...");
+    client_handle.abort();
     drop(client_handle);
     drop(server_handle);
     pingpong_server.shutdown().await?;

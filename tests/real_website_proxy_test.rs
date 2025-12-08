@@ -59,8 +59,6 @@ async fn test_tunnel_proxy_to_real_website() -> Result<()> {
             server: Some(gsc_fq::config::loader::ServerSection {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(false),
-                auth_token: None,
-                allowed_tokens: Vec::new(),
             }),
             proxies: vec![proxy_config],
             reverse_proxies: vec![],

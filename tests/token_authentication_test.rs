@@ -1,7 +1,7 @@
 mod support;
 
 use anyhow::Result;
-use gsc_fq::config::loader::{ConfigFile, ServerSection, ReverseProxySection};
+use gsc_fq::config::loader::{ConfigFile, ServerSection, ReverseProxySection, ReverseProxyClientSection};
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -54,8 +54,6 @@ async fn test_token_authentication() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
-            auth_token: None,
-            allowed_tokens: vec![],
         }),
         proxies: vec![],
         reverse_proxies: vec![ReverseProxySection {
@@ -63,8 +61,10 @@ async fn test_token_authentication() -> Result<()> {
             local: format!("127.0.0.1:{}", local_port),
             source_ip: None,
         }],
-        reverse_mode: Some("client".to_string()),
-        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
+        reverse_proxy_server: None,
+        reverse_proxy_client: Some(ReverseProxyClientSection {
+            server: format!("127.0.0.1:{}", control_port),
+        }),
     };
 
     // 测试无效TOKEN连接（应该快速失败）
@@ -101,8 +101,6 @@ async fn test_token_authentication() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
-            auth_token: None,
-            allowed_tokens: vec![],
         }),
         proxies: vec![],
         reverse_proxies: vec![ReverseProxySection {
@@ -110,8 +108,10 @@ async fn test_token_authentication() -> Result<()> {
             local: format!("127.0.0.1:{}", local_port),
             source_ip: None,
         }],
-        reverse_mode: Some("client".to_string()),
-        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
+        reverse_proxy_server: None,
+        reverse_proxy_client: Some(ReverseProxyClientSection {
+            server: format!("127.0.0.1:{}", control_port),
+        }),
     };
 
     // 启动有效TOKEN客户端
@@ -263,8 +263,6 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
             server: Some(ServerSection {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(true),
-                auth_token: None,
-                allowed_tokens: vec![],
             }),
             proxies: vec![],
             reverse_proxies: vec![ReverseProxySection {
@@ -272,8 +270,10 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
                 local: format!("127.0.0.1:{}", local_port),
                 source_ip: None,
             }],
-            reverse_mode: Some("client".to_string()),
-            reverse_target: Some(format!("127.0.0.1:{}", control_port)),
+            reverse_proxy_server: None,
+            reverse_proxy_client: Some(ReverseProxyClientSection {
+                server: format!("127.0.0.1:{}", control_port),
+            }),
         };
 
         let result = tokio::time::timeout(
@@ -312,8 +312,6 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
         server: Some(ServerSection {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
-            auth_token: None,
-            allowed_tokens: vec![],
         }),
         proxies: vec![],
         reverse_proxies: vec![ReverseProxySection {
@@ -321,8 +319,10 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
             local: format!("127.0.0.1:{}", local_port),
             source_ip: None,
         }],
-        reverse_mode: Some("client".to_string()),
-        reverse_target: Some(format!("127.0.0.1:{}", control_port)),
+        reverse_proxy_server: None,
+        reverse_proxy_client: Some(ReverseProxyClientSection {
+            server: format!("127.0.0.1:{}", control_port),
+        }),
     };
 
     let invalid_result = tokio::time::timeout(
