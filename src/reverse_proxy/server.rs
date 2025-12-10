@@ -124,6 +124,8 @@ impl ReverseProxyServer {
             cleanup_task: Some(cleanup_task),
         }
     }
+
+    
     /// Start the reverse proxy server
     pub async fn start(&mut self) -> Result<()> {
         let listener = TcpListener::bind(self.control_addr).await?;
@@ -370,32 +372,27 @@ impl ReverseProxyServer {
 
     /// Handle a direct TCP connection from proxy port
     async fn handle_direct_tcp_connection(
-        mut tcp_stream: TcpStream,
+        tcp_stream: TcpStream,
         proxy_configs: Vec<ReverseProxyConfig>,
     ) -> Result<()> {
-        // Read port header from the proxy connection
-        let mut port_bytes = [0u8; 2];
-        if let Err(e) = tcp_stream.read_exact(&mut port_bytes).await {
-            error_println!("Failed to read port header: {}", e);
-            return Err(crate::error::ReverseProxyError::ConnectionFailed(
-                format!("Failed to read port header: {}", e)
-            ).into());
-        }
+        // Get the local port this connection came in on
+        let local_port = tcp_stream.local_addr()?.port();
+        debug_println!("Received direct TCP connection on local port {}", local_port);
 
-        let server_port = u16::from_be_bytes(port_bytes);
-        debug_println!("Received direct TCP connection for server port {}", server_port);
-
-        // Find the corresponding local target
+        // Find the corresponding local target based on the listening port
         let local_target = proxy_configs.iter()
-            .find(|c| c.server_port == server_port)
+            .find(|c| c.server_port == local_port)
             .cloned();
 
         let Some(target) = local_target else {
-            error_println!("Unknown server port: {}", server_port);
+            error_println!("No proxy configuration found for local port {}", local_port);
             return Err(crate::error::ReverseProxyError::ConnectionFailed(
-                format!("Unknown server port: {}", server_port)
+                format!("No proxy configuration found for local port {}", local_port)
             ).into());
         };
+
+        debug_println!("Forwarding connection from port {} to {}:{}",
+            local_port, target.local_host, target.local_port);
 
         // Handle the TCP stream data forwarding
         Self::handle_stream(tcp_stream, target).await
@@ -579,7 +576,7 @@ impl ReverseProxyServer {
 
                                     // Handle the proxy connection
                                     if let Err(e) = Self::handle_direct_tcp_connection(stream, configs_for_listener.clone()).await {
-                                        error_println!("❌ Failed to handle direct TCP connection: {}", e);
+                                        error_println!("❌ Failed to handle TCP connection: {}", e);
                                     }
                                 }
                                 Err(e) => {

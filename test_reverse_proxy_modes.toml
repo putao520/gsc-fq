@@ -1,0 +1,20 @@
+# Test configuration for reverse proxy modes
+
+[server]
+bind_ip = "127.0.0.1"
+debug = true
+
+# Direct mode configuration (default behavior)
+[reverse_proxy_server]
+port = 9001
+mode = "direct"
+allowed_tokens = ["test-token"]
+
+[reverse_proxy_client]
+server = "127.0.0.1:9001"
+
+# Test reverse proxies for direct mode
+[[reverse_proxies]]
+server = "9000"
+local = "localhost:3000"
+source_ip = "127.0.0.1"

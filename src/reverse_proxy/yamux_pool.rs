@@ -376,33 +376,20 @@ impl YamuxConnectionPool {
     ) -> Result<()> {
         use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-        let mut yamux_tokio = yamux_stream.compat();
+        let yamux_tokio = yamux_stream.compat();
 
-        // Read port header (first 2 bytes)
-        let mut port_bytes = [0u8; 2];
-        debug_println!("Reading port header from incoming stream...");
-
-        if let Err(e) = yamux_tokio.read_exact(&mut port_bytes).await {
-            error_println!("Failed to read port header: {}", e);
-            return Err(crate::error::ReverseProxyError::ConnectionFailed(
-                format!("Failed to read port header: {}", e)
-            ).into());
-        }
-
-        let server_port = u16::from_be_bytes(port_bytes);
-        debug_println!("Received incoming stream for server port {}", server_port);
-
-        // Find the corresponding local target
-        let local_target = proxy_configs.iter()
-            .find(|c| c.server_port == server_port)
-            .cloned();
+        // Use the first available proxy configuration
+        let local_target = proxy_configs.first().cloned();
 
         let Some(target) = local_target else {
-            error_println!("Unknown server port: {}", server_port);
+            error_println!("No proxy configurations available");
             return Err(crate::error::ReverseProxyError::ConnectionFailed(
-                format!("Unknown server port: {}", server_port)
+                "No proxy configurations available".to_string()
             ).into());
         };
+
+        debug_println!("Received Yamux stream, forwarding to {}:{}",
+            target.local_host, target.local_port);
 
         // Handle the stream data forwarding
         Self::handle_stream_forwarding(yamux_tokio, target).await

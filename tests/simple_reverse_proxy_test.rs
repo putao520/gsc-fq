@@ -75,21 +75,16 @@ async fn test_basic_reverse_proxy_functionality() -> Result<()> {
         TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
     ).await??;
 
-    // 6. 按照协议发送端口头部 (服务端口9000)
-    let server_port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
-    stream.write_all(&server_port_bytes).await?;
-    stream.flush().await?;
-
-    // 7. 发送测试数据
+    // 6. 发送测试数据 (直接发送，不需要端口头部)
     let test_data = b"Hello, Proxy!";
     stream.write_all(test_data).await?;
     stream.flush().await?;
 
-    // 8. 读取回显数据
+    // 7. 读取回显数据
     let mut response = vec![0u8; test_data.len()];
     timeout(Duration::from_secs(5), stream.read_exact(&mut response)).await??;
 
-    // 9. 验证数据
+    // 8. 验证数据
     assert_eq!(test_data, &response[..], "代理应该回显相同的数据");
     println!("✅ 数据回显测试通过");
 
