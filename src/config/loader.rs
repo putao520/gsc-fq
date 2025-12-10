@@ -498,33 +498,17 @@ impl ConfigLoader {
             .map_err(|_| ConfigError::InvalidIpAddress(trimmed.to_string()))?)
     }
 
-    /// Create socket address
+    /// Create socket address - ONLY accepts IP addresses, no DNS resolution
+    /// Tunnel proxy should only use IP addresses directly
     pub fn create_socket_addr(host: &str, port: u16) -> Result<SocketAddr> {
-        // Try to parse as IP address first
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            Ok(SocketAddr::new(ip, port))
-        } else {
-            // If not an IP address, use std::net::ToSocketAddrs to resolve hostname
-            use crate::error::NetworkError;
-            use std::net::ToSocketAddrs;
-
-            let host_port = format!("{}:{}", host, port);
-            let mut addrs = (host_port.as_str(), 0).to_socket_addrs().map_err(|e| {
-                NetworkError::AddressResolutionFailed(format!(
-                    "Failed to resolve hostname '{}': {}",
-                    host, e
-                ))
-            })?;
-
-            // Return the first address
-            let addr = addrs.next().ok_or_else(|| {
-                AppError::Network(NetworkError::AddressResolutionFailed(format!(
-                    "No addresses found for hostname '{}'",
-                    host
-                )))
-            })?;
-            Ok(SocketAddr::new(addr.ip(), port))
-        }
+        // Only parse as IP address - no DNS resolution allowed
+        host.parse::<IpAddr>()
+            .map(|ip| SocketAddr::new(ip, port))
+            .map_err(|_| ConfigError::InvalidIpAddress(format!(
+                "Invalid IP address '{}'. Tunnel proxy requires IP addresses, not hostnames. Use nslookup or dig to resolve hostnames manually.",
+                host
+            )))
+            .map_err(AppError::Config)
     }
 
     /// Check if configuration file exists

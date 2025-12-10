@@ -19,25 +19,25 @@ struct TunnelService {
     test_data: &'static [u8],
 }
 
-/// 经过验证的可靠互联网服务
+/// 经过验证的可靠互联网服务（仅使用IP地址）
 const TUNNEL_SERVICES: &[TunnelService] = &[
     TunnelService {
         name: "httpbin_get",
-        host: "httpbin.org",
+        host: "3.217.172.174",  // httpbin.org的IP地址
         port: 80,
         description: "HTTP GET请求测试服务",
         test_data: b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
     },
     TunnelService {
         name: "httpbin_status",
-        host: "httpbin.org",
+        host: "174.129.209.199", // httpbin.org的另一个IP地址
         port: 80,
         description: "HTTP状态码测试服务",
         test_data: b"GET /status/200 HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
     },
     TunnelService {
         name: "httpbin_ip",
-        host: "httpbin.org",
+        host: "100.28.16.212",   // httpbin.org的第三个IP地址
         port: 80,
         description: "HTTP IP查询服务",
         test_data: b"GET /ip HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
@@ -323,7 +323,7 @@ async fn test_tunnel_proxy_data_integrity() -> Result<()> {
     // 创建代理配置
     let proxy_config = ProxySection {
         local: proxy_port.to_string(),
-        remote: "httpbin.org:80".to_string(),
+        remote: "3.217.172.174:80".to_string(), // 使用IP地址
         source_ip: None,
     };
 
@@ -385,8 +385,8 @@ async fn test_tunnel_proxy_different_protocols() -> Result<()> {
     println!("🌐 测试隧道代理支持不同协议...");
 
     let services = vec![
-        ("HTTP", "httpbin.org", 80, b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"),
-        ("HTTPS", "httpbin.org", 443, b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"),
+        ("HTTP", "3.217.172.174", 80, b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"),
+        ("HTTPS", "3.217.172.174", 443, b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"),
     ];
 
     for (protocol, host, port, test_data) in services {

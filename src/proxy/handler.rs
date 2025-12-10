@@ -64,7 +64,7 @@ impl ConnectionHandler {
             }
         } else {
             debug_println!("Connecting to {}", self.remote_addr);
-            // Add connection timeout
+            // Add connection timeout - let system handle DNS resolution
             match tokio::time::timeout(
                 Duration::from_secs(10),
                 TcpStream::connect(self.remote_addr),
@@ -129,8 +129,7 @@ impl ConnectionHandler {
             _ => {
                 return Err(NetworkError::ConnectionFailed(
                     "Source IP family does not match remote address family".to_string(),
-                )
-                .into());
+                ).into());
             }
         };
 
