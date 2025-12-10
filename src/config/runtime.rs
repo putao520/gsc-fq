@@ -142,15 +142,10 @@ impl RuntimeManager {
     async fn run_reverse_server(&self) -> Result<()> {
         eprintln!("🏠 Starting reverse proxy server mode...");
 
-        let control_port = if let Some(runtime) = &self.config.runtime {
-            runtime.control_port
+        let control_port = if let Some(server) = &self.config.reverse_proxy_server {
+            server.port  // 符合SPEC：从reverse_proxy_server获取端口
         } else {
-            eprintln!("❌ No control_port specified in runtime configuration!");
-            return Err(AppError::Config(
-                crate::error::ConfigError::MissingRequiredField(
-                    "runtime.control_port".to_string()
-                )
-            ));
+            9001  // 符合SPEC：默认控制端口（ARCH-REVERSE-004）
         };
 
         // Get bind IP
@@ -169,13 +164,13 @@ impl RuntimeManager {
     async fn run_reverse_client(&self) -> Result<()> {
         eprintln!("🌐 Starting reverse proxy client mode...");
 
-        let server_address = if let Some(runtime) = &self.config.runtime {
-            runtime.server_address.clone()
+        let server_address = if let Some(client) = &self.config.reverse_proxy_client {
+            client.server.clone()  // 符合SPEC：从reverse_proxy_client获取地址
         } else {
-            eprintln!("❌ No server_address specified in runtime configuration!");
+            eprintln!("❌ No reverse_proxy_client configuration found!");
             return Err(AppError::Config(
                 crate::error::ConfigError::MissingRequiredField(
-                    "runtime.server_address".to_string()
+                    "reverse_proxy_client".to_string()
                 )
             ));
         };
