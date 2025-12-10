@@ -567,25 +567,39 @@ impl ReverseProxyServer {
 
                     let handle = tokio::spawn(async move {
                         debug_println!("✅ Proxy port {} bound and listening", port);
+                        let mut consecutive_accept_errors = 0;
+                        const MAX_ACCEPT_ERRORS: u32 = 10;
+
                         // Accept connections on this port
                         loop {
                             match listener.accept().await {
                                 Ok((stream, peer_addr)) => {
                                     debug_println!("🔧 New proxy connection from {} on port {}", peer_addr, port);
+                                    consecutive_accept_errors = 0; // Reset error counter on success
+
                                     // Handle the proxy connection
                                     if let Err(e) = Self::handle_direct_tcp_connection(stream, configs_for_listener.clone()).await {
                                         error_println!("❌ Failed to handle direct TCP connection: {}", e);
                                     }
                                 }
                                 Err(e) => {
-                                    // Accept failed - this usually means the listener was dropped
-                                    // or the client disconnected. We should exit gracefully.
-                                    error_println!("❌ Listener for port {} closed: {}", port, e);
-                                    break;
+                                    consecutive_accept_errors += 1;
+                                    error_println!("❌ Accept error {} on port {}: {}", consecutive_accept_errors, port, e);
+
+                                    // Only exit if we get many consecutive errors
+                                    if consecutive_accept_errors >= MAX_ACCEPT_ERRORS {
+                                        error_println!("❌ Too many consecutive accept errors ({}), stopping listener for port {}",
+                                            consecutive_accept_errors, port);
+                                        break;
+                                    }
+
+                                    // Brief delay before retrying
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                 }
                             }
                         }
-                        debug_println!("🔧 Proxy port {} listener stopped", port);
+                        debug_println!("🔧 Proxy port {} listener stopped after {} consecutive errors",
+                            port, consecutive_accept_errors);
                     });
                     listener_handles.push(handle);
                     debug_println!("✅ Proxy port {} bound successfully", port);
@@ -613,46 +627,73 @@ impl ReverseProxyServer {
         // Upgrade to Yamux connection for the control channel
         let compat_stream = stream.compat();
         let config = Config::default();
+        debug_println!("🔧 Yamux config: using default settings");
         let mut conn = Connection::new(compat_stream, config, Mode::Server);
 
         debug_println!("🔧 Server control connection established for client {}", client_id);
 
         // Keep the control connection alive and handle incoming Yamux streams
+        let mut last_stream_time = std::time::Instant::now();
+        let mut idle_check_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+
+        debug_println!("🔧 Starting control connection monitoring for client {}", client_id);
+
         loop {
-            match poll_fn(|cx| conn.poll_next_inbound(cx)).await {
-                Some(Ok(stream)) => {
-                    debug_println!("🔧 Server received new Yamux stream from client {}", client_id);
-                    // Update client activity
+            tokio::select! {
+                // Handle incoming Yamux streams
+                result = poll_fn(|cx| conn.poll_next_inbound(cx)) => {
+                    match result {
+                        Some(Ok(stream)) => {
+                            debug_println!("🔧 Server received new Yamux stream from client {}", client_id);
+                            last_stream_time = std::time::Instant::now();
+
+                            // Update client activity
+                            {
+                                let mut clients_lock = clients.lock().await;
+                                if let Some(session) = clients_lock.get_mut(&client_id) {
+                                    session.update_activity();
+                                }
+                            }
+                            // Handle the stream with the stored proxy configs
+                            match Self::handle_server_stream_with_activity_update(stream, &client_id, &clients, proxy_configs.clone()).await {
+                                Ok(()) => {
+                                    debug_println!("✅ Stream handled successfully for client {}", client_id);
+                                }
+                                Err(e) => {
+                                    error_println!("❌ Failed to handle server stream: {}", e);
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            error_println!("❌ Failed to accept stream from client {}: {}", client_id, e);
+                            break;
+                        }
+                        None => {
+                            debug_println!("🔧 Server control connection closed for client {} (poll returned None)", client_id);
+                            // Update activity one last time before disconnecting
+                            {
+                                let mut clients_lock = clients.lock().await;
+                                if let Some(session) = clients_lock.get_mut(&client_id) {
+                                    session.update_activity();
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Periodic idle check to prevent the connection from blocking indefinitely
+                _ = idle_check_interval.tick() => {
+                    let idle_time = last_stream_time.elapsed();
+                    debug_println!("🔧 Control connection idle for {} seconds for client {}", idle_time.as_secs(), client_id);
+
+                    // Keep updating activity to prevent cleanup
                     {
                         let mut clients_lock = clients.lock().await;
                         if let Some(session) = clients_lock.get_mut(&client_id) {
                             session.update_activity();
                         }
                     }
-                    // Handle the stream with the stored proxy configs
-                    match Self::handle_server_stream_with_activity_update(stream, &client_id, &clients, proxy_configs.clone()).await {
-                        Ok(()) => {
-                            debug_println!("✅ Stream handled successfully for client {}", client_id);
-                        }
-                        Err(e) => {
-                            error_println!("❌ Failed to handle server stream: {}", e);
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    error_println!("❌ Failed to accept stream from client {}: {}", client_id, e);
-                    break;
-                }
-                None => {
-                    debug_println!("🔧 Server control connection closed for client {}", client_id);
-                    // Update activity one last time before disconnecting
-                    {
-                        let mut clients_lock = clients.lock().await;
-                        if let Some(session) = clients_lock.get_mut(&client_id) {
-                            session.update_activity();
-                        }
-                    }
-                    break;
                 }
             }
         }

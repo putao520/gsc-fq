@@ -236,6 +236,8 @@ impl YamuxConnectionPool {
         config.set_max_num_streams(1024);              // 每个连接最多1024个流
         // 注意：0.13版本自动启用动态窗口调优，不再需要手动设置接收窗口
 
+        debug_println!("🔧 Client Yamux config: max_streams=1024");
+
         config
     }
     
