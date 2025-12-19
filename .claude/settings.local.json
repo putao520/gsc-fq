@@ -4,7 +4,9 @@
       "Bash(rm:*)",
       "Bash(git add:*)",
       "mcp__context7__resolve-library-id",
-      "mcp__context7__get-library-docs"
+      "mcp__context7__get-library-docs",
+      "mcp__gcode__project_overview",
+      "mcp__gcode__pre_plan"
     ],
     "deny": [],
     "ask": []

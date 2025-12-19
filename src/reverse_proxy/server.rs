@@ -394,8 +394,8 @@ impl ReverseProxyServer {
         debug_println!("Forwarding connection from port {} to {}:{}",
             local_port, target.local_host, target.local_port);
 
-        // Handle the TCP stream data forwarding
-        Self::handle_stream(tcp_stream, target).await
+        // Use a more robust forwarding approach to prevent data corruption
+        Self::handle_stream_with_no_corruption(tcp_stream, target).await
     }
 
     /// Handle a single yamux stream (legacy)
@@ -416,7 +416,7 @@ impl ReverseProxyServer {
 
         debug_println!("Connected to local service: {}", local_addr);
 
-        // Bidirectional copy
+        // Use bidirectional copy for reliable data transfer
         match copy_bidirectional(&mut yamux_stream, &mut local_stream).await {
             Ok((from_yamux, to_yamux)) => {
                 debug_println!(
@@ -429,6 +429,90 @@ impl ReverseProxyServer {
             }
         }
 
+        Ok(())
+    }
+
+    /// Robust data forwarding without data corruption
+    async fn handle_stream_with_no_corruption(
+        mut stream: TcpStream,
+        target: ReverseProxyConfig,
+    ) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // Connect to local service
+        let local_addr = format!("{}:{}", target.local_host, target.local_port);
+        let mut local_stream = TcpStream::connect(&local_addr).await.map_err(|e| {
+            ReverseProxyError::ConnectionFailed(format!(
+                "Failed to connect to local service {}: {}",
+                local_addr, e
+            ))
+        })?;
+
+        debug_println!("Connected to local service: {}", local_addr);
+
+        // Use separate buffers to avoid borrowing issues
+        let mut client_buf = [0u8; 4096];
+        let mut server_buf = [0u8; 4096];
+        let mut client_closed = false;
+        let mut server_closed = false;
+
+        while !client_closed && !server_closed {
+            tokio::select! {
+                // Read from client and write to server
+                result = stream.read(&mut client_buf) => {
+                    match result {
+                        Ok(0) => {
+                            client_closed = true;
+                            debug_println!("📥 Client closed connection");
+                            break;
+                        }
+                        Ok(n) => {
+                            // Forward exact bytes to local service
+                            if let Err(e) = local_stream.write_all(&client_buf[..n]).await {
+                                debug_println!("Error writing to local service: {}", e);
+                                break;
+                            }
+                            if let Err(e) = local_stream.flush().await {
+                                debug_println!("Error flushing to local service: {}", e);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            debug_println!("Client read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Read from server and write to client
+                result = local_stream.read(&mut server_buf) => {
+                    match result {
+                        Ok(0) => {
+                            server_closed = true;
+                            debug_println!("📥 Server (local service) closed connection");
+                            break;
+                        }
+                        Ok(n) => {
+                            // Forward exact bytes back to client
+                            if let Err(e) = stream.write_all(&server_buf[..n]).await {
+                                debug_println!("Error writing to client: {}", e);
+                                break;
+                            }
+                            if let Err(e) = stream.flush().await {
+                                debug_println!("Error flushing to client: {}", e);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            debug_println!("Server read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        debug_println!("✅ Robust stream forwarding completed");
         Ok(())
     }
 

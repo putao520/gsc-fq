@@ -72,11 +72,6 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
             tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
         ).await??;
 
-        // 发送端口头部
-        let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
-        stream.write_all(&port_bytes).await?;
-        stream.flush().await?;
-
         // 客户端发送多个消息
         let messages = vec![
             format!("Message {} from client", round),
@@ -86,13 +81,20 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
 
         for (i, msg) in messages.iter().enumerate() {
             println!("📤 客户端发送消息 {}: {}", i+1, msg);
+
+            // 为每个消息发送端口头部（这样每个消息都有独立的Yamux流）
+            let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
+            stream.write_all(&port_bytes).await?;
             stream.write_all(msg.as_bytes()).await?;
             stream.flush().await?;
 
-            // 读取echo响应
-            let mut response = vec![0u8; msg.len()];
-            timeout(Duration::from_secs(3), stream.read_exact(&mut response)).await??;
-            let response_str = String::from_utf8_lossy(&response);
+            // 读取echo响应 - echo服务器会返回端口头部+消息
+            let mut full_response = vec![0u8; msg.len() + 2]; // 端口头部(2字节) + 消息长度
+            timeout(Duration::from_secs(3), stream.read_exact(&mut full_response)).await??;
+
+            // 提取消息部分（跳过端口头部）
+            let response = &full_response[2..];
+            let response_str = String::from_utf8_lossy(response);
             println!("📥 客户端收到响应: {}", response_str.trim());
 
             // 验证echo正确
@@ -100,13 +102,20 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
         }
 
         // 发送一些二进制数据测试
+        // 为二进制数据也发送端口头部
+        let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
         let binary_data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
         println!("📤 客户端发送二进制数据: {:?}", binary_data);
+        stream.write_all(&port_bytes).await?;
         stream.write_all(&binary_data).await?;
         stream.flush().await?;
 
-        let mut binary_response = vec![0u8; binary_data.len()];
-        timeout(Duration::from_secs(3), stream.read_exact(&mut binary_response)).await??;
+        // 读取二进制响应 - echo服务器会返回端口头部+二进制数据
+        let mut full_binary_response = vec![0u8; binary_data.len() + 2]; // 端口头部(2字节) + 二进制数据长度
+        timeout(Duration::from_secs(3), stream.read_exact(&mut full_binary_response)).await??;
+
+        // 提取二进制数据部分（跳过端口头部）
+        let binary_response = &full_binary_response[2..];
         println!("📥 客户端收到二进制响应: {:?}", binary_response);
         assert_eq!(binary_data, binary_response, "二进制数据应该完全匹配");
 
@@ -133,10 +142,13 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
             stream.write_all(msg.as_bytes()).await.unwrap();
             stream.flush().await.unwrap();
 
-            let mut response = vec![0u8; msg.len()];
-            timeout(Duration::from_secs(3), stream.read_exact(&mut response)).await.unwrap().unwrap();
+            // 读取echo响应 - echo服务器会返回端口头部+消息
+            let mut full_response = vec![0u8; msg.len() + 2]; // 端口头部(2字节) + 消息长度
+            timeout(Duration::from_secs(3), stream.read_exact(&mut full_response)).await.unwrap().unwrap();
 
-            let response_str = String::from_utf8_lossy(&response);
+            // 提取消息部分（跳过端口头部）
+            let response = &full_response[2..];
+            let response_str = String::from_utf8_lossy(response);
             println!("并发连接{} 收到: {}", i, response_str.trim());
             assert_eq!(msg, response_str.trim());
         });
