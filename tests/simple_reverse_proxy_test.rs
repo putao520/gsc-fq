@@ -1,14 +1,14 @@
 mod support;
 
 use anyhow::Result;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use support::wait_for_port_ready;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::timeout;
-use std::time::Duration;
-use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use gsc_fq::config::loader::ConfigFile;
+use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
+use support::wait_for_port_ready;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 // 固定端口配置
 const PROXY_SERVER_PORT: u16 = 9001;
@@ -35,12 +35,16 @@ async fn test_basic_reverse_proxy_functionality() -> Result<()> {
     };
 
     let config = ConfigFile {
+        token: Some("".to_string()),
+        totp_secret: None,
         server: None,
         proxies: vec![],
         reverse_proxies: vec![proxy_config],
         reverse_proxy_server: None,
         reverse_proxy_client: Some(gsc_fq::config::loader::ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", PROXY_SERVER_PORT),
+            token: None,
+            totp_secret: None,
         }),
     };
 
@@ -72,8 +76,9 @@ async fn test_basic_reverse_proxy_functionality() -> Result<()> {
     println!("🌐 测试代理连接...");
     let mut stream = timeout(
         Duration::from_secs(5),
-        TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
-    ).await??;
+        TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
+    )
+    .await??;
 
     // 6. 发送测试数据 (直接发送，不需要端口头部)
     let test_data = b"Hello, Proxy!";

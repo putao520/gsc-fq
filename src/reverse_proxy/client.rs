@@ -1,100 +1,85 @@
 use crate::config::loader::ConfigFile;
-use crate::error::{ReverseProxyError, Result};
+use crate::error::{Result, ReverseProxyError};
 use crate::reverse_proxy::protocol::*;
-use crate::reverse_proxy::yamux_pool::{YamuxConnectionPool, ConnectionSelectionStrategy, DEFAULT_POOL_SIZE};
-use crate::{debug_println, error_println, warning_println};
+use crate::{debug_println, error_println};
+use futures::future::poll_fn;
+use sha2::Digest;
 use std::net::SocketAddr;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpSocket, TcpStream, UdpSocket};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use yamux::{Config, Connection, Mode};
 
 /// Reverse proxy client
+///
+/// 简化的反向代理客户端，直接使用单个 Yamux 连接
 pub struct ReverseProxyClient {
     server_addr: SocketAddr,
     config: ConfigFile,
-
-    /// Yamux连接池
-    yamux_pool: Option<YamuxConnectionPool>,
-
-    /// 连接池大小（默认32）
-    yamux_pool_size: usize,
-
-    /// 负载均衡策略
-    selection_strategy: ConnectionSelectionStrategy,
-
-    /// 认证TOKEN
     auth_token: Option<String>,
+    totp_secret: Option<String>,
 }
 
 impl ReverseProxyClient {
     /// Create new reverse proxy client
     pub fn new(server_addr: SocketAddr, config: ConfigFile) -> Self {
         // 从环境变量读取auth_token
-        let auth_token = std::env::var("REVERSE_PROXY_TOKEN")
-            .ok()
-            .or_else(|| {
-                // 从配置文件读取token（如果指定）
-                config.reverse_proxy_server.as_ref()
-                    .and_then(|s| {
-                        if !s.allowed_tokens.is_empty() {
-                            Some(s.allowed_tokens[0].clone())
-                        } else {
-                            None
-                        }
-                    })
-            });
+        let auth_token = std::env::var("REVERSE_PROXY_TOKEN").ok().or_else(|| {
+            // 从配置文件读取token（如果指定）
+            config.reverse_proxy_server.as_ref().and_then(|s| {
+                if !s.allowed_tokens.is_empty() {
+                    Some(s.allowed_tokens[0].clone())
+                } else {
+                    None
+                }
+            })
+        });
 
-        // 从环境变量或配置读取pool_size，默认32
-        let yamux_pool_size = std::env::var("YAMUX_POOL_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_POOL_SIZE);
+        let totp_secret = config
+            .reverse_proxy_client
+            .as_ref()
+            .and_then(|c| c.totp_secret.clone());
 
         Self {
             server_addr,
             config,
-            yamux_pool: None,
-            yamux_pool_size,
-            selection_strategy: ConnectionSelectionStrategy::RoundRobin,
             auth_token,
+            totp_secret,
         }
     }
 
     /// Create new reverse proxy client with custom auth token
     pub fn new_with_token(server_addr: SocketAddr, config: ConfigFile, auth_token: String) -> Self {
-        // 从环境变量或配置读取pool_size，默认32
-        let yamux_pool_size = std::env::var("YAMUX_POOL_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_POOL_SIZE);
-
         Self {
             server_addr,
             config,
-            yamux_pool: None,
-            yamux_pool_size,
-            selection_strategy: ConnectionSelectionStrategy::RoundRobin,
             auth_token: Some(auth_token),
+            totp_secret: None,
         }
     }
-    
-    /// Start the reverse proxy client
+
+    /// Start the reverse proxy client with automatic reconnection
     pub async fn start(&mut self) -> Result<()> {
         let mut retry_count = 0u64;
         let mut backoff_seconds = 1u64;
-        #[allow(dead_code)] const MIN_BACKOFF: u64 = 1;  // Currently unused but kept for future retry logic
         const MAX_BACKOFF: u64 = 60;
-        const MAX_RETRIES: u64 = 10;  // Limit retry attempts to prevent infinite loops
+        const MAX_RETRIES: u64 = 10;
 
         loop {
-            // Check if we've exceeded maximum retry attempts
             if retry_count >= MAX_RETRIES {
-                error_println!("Maximum retry attempts ({}) exceeded, giving up", MAX_RETRIES);
-                return Err(ReverseProxyError::ConnectionFailed(
-                    format!("Failed after {} retry attempts", MAX_RETRIES)
-                ).into());
+                error_println!(
+                    "Maximum retry attempts ({}) exceeded, giving up",
+                    MAX_RETRIES
+                );
+                return Err(ReverseProxyError::ConnectionFailed(format!(
+                    "Failed after {} retry attempts",
+                    MAX_RETRIES
+                ))
+                .into());
             }
 
-            match self.try_connect_and_run().await {
+            match self.run_connection().await {
                 Ok(_) => {
-                    // Connection completed successfully, exit cleanly
                     println!("✅ Connection completed successfully");
                     return Ok(());
                 }
@@ -103,38 +88,108 @@ impl ReverseProxyClient {
                     error_println!("Connection failed (attempt {}): {}", retry_count, e);
 
                     if retry_count < MAX_RETRIES {
-                        println!("🔄 Reconnecting in {} seconds... (attempt {}/{})",
-                            backoff_seconds, retry_count, MAX_RETRIES);
+                        println!(
+                            "🔄 Reconnecting in {} seconds... (attempt {}/{})",
+                            backoff_seconds, retry_count, MAX_RETRIES
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_secs(backoff_seconds)).await;
-
-                        // Exponential backoff with max limit
                         backoff_seconds = (backoff_seconds * 2).min(MAX_BACKOFF);
                     }
                 }
             }
         }
     }
-    
-    
-    /// Try to connect to server and run the main loop (extracted for retry logic)
-    async fn try_connect_and_run(&mut self) -> Result<()> {
-        println!("🔄 Creating Yamux connection pool ({} connections) to {}", 
-            self.yamux_pool_size, self.server_addr);
-        
-        // Convert ReverseProxySection to ReverseProxyConfig
+
+    /// Run a single connection session
+    async fn run_connection(&mut self) -> Result<()> {
+        // 1. 解析代理配置
+        let proxy_configs = self.parse_proxy_configs()?;
+
+        if proxy_configs.is_empty() {
+            return Err(ReverseProxyError::HandshakeFailed(
+                "No valid reverse proxy configurations".to_string(),
+            )
+            .into());
+        }
+
+        println!(
+            "🔄 Connecting to reverse proxy server: {}",
+            self.server_addr
+        );
+
+        // 2. 创建优化的 TCP 连接
+        let mut stream = self.create_optimized_tcp().await?;
+
+        // 3. 执行握手协议
+        self.do_handshake(&mut stream, &proxy_configs).await?;
+
+        // 4. 显示活跃的反向代理
+        println!("\n📡 Active Reverse Proxies:");
+        for config in &proxy_configs {
+            println!(
+                "   Server:{} → Local:{}:{}",
+                config.server_port, config.local_host, config.local_port
+            );
+        }
+        println!();
+
+        // 5. 升级到 Yamux 连接
+        let compat_stream = stream.compat();
+        let yamux_config = Self::create_optimized_yamux_config();
+        let mut conn = Connection::new(compat_stream, yamux_config, Mode::Client);
+
+        println!("✅ Yamux connection established, waiting for tunnel requests...");
+
+        // 6. 主循环：处理来自服务端的流
+        loop {
+            match poll_fn(|cx| conn.poll_next_inbound(cx)).await {
+                Some(Ok(yamux_stream)) => {
+                    debug_println!("🔧 Received new tunnel stream from server");
+
+                    let configs = proxy_configs.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = Self::handle_tunnel_stream(yamux_stream, configs).await {
+                            error_println!("❌ Tunnel stream error: {}", e);
+                        }
+                    });
+                }
+                Some(Err(e)) => {
+                    error_println!("❌ Yamux connection error: {}", e);
+                    return Err(ReverseProxyError::ConnectionFailed(e.to_string()).into());
+                }
+                None => {
+                    debug_println!("🔧 Yamux connection closed by server");
+                    return Err(ReverseProxyError::ConnectionFailed(
+                        "Connection closed by server".to_string(),
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+
+    /// Parse reverse proxy configurations from config file
+    fn parse_proxy_configs(&self) -> Result<Vec<ReverseProxyConfig>> {
         let mut proxy_configs = Vec::new();
+
         for rproxy in &self.config.reverse_proxies {
             let server_port = rproxy.get_server_port().map_err(|e| {
                 ReverseProxyError::HandshakeFailed(format!("Invalid server config: {}", e))
             })?;
-            let server_host = rproxy.get_server_ip();  // 获取服务器绑定IP
+            let server_host = rproxy.get_server_ip();
             let local_port = rproxy.get_local_port().map_err(|e| {
                 ReverseProxyError::HandshakeFailed(format!("Invalid local config: {}", e))
             })?;
-            let local_host = rproxy.get_local_host().unwrap_or_else(|| "localhost".to_string());
+            let local_host = rproxy
+                .get_local_host()
+                .unwrap_or_else(|| "localhost".to_string());
 
-            println!("🔧 Client sending config: server_port={}, server_host={:?}, local={}:{}",
-                server_port, server_host, local_host, local_port);
+            debug_println!(
+                "🔧 Proxy config: server_port={}, local={}:{}",
+                server_port,
+                local_host,
+                local_port
+            );
 
             proxy_configs.push(ReverseProxyConfig {
                 server_port,
@@ -143,192 +198,280 @@ impl ReverseProxyClient {
                 local_port,
             });
         }
-        
-        if proxy_configs.is_empty() {
-            return Err(ReverseProxyError::HandshakeFailed(
-                "No valid reverse proxy configurations".to_string()
-            ).into());
-        }
-        
-        // Create Yamux connection pool
-        let pool = YamuxConnectionPool::new(
-            self.server_addr,
-            &proxy_configs,
-            self.yamux_pool_size,
-            self.selection_strategy,
-            &self.auth_token,
-        ).await?;
-        
-        // Display active reverse proxies
-        println!("\n📡 Active Reverse Proxies:");
-        for config in &proxy_configs {
-            println!("   Server:{} → Local:{}:{}",
-                config.server_port,
-                config.local_host,
-                config.local_port
-            );
-        }
-        
-        // Display pool stats
-        let stats = pool.get_stats().await;
-        println!("\n🔗 Connection Pool:");
-        println!("   Total connections: {}", stats.pool_size);
-        println!("   Active connections: {}", stats.active_connections);
-        println!("   Strategy: {:?}", self.selection_strategy);
-        println!();
-        
-        self.yamux_pool = Some(pool);
-        
-        self.run_session(proxy_configs).await
+
+        Ok(proxy_configs)
     }
-    
-    
-    /// Run a single session (separated for cleaner code)
-    async fn run_session(&mut self, _proxy_configs: Vec<ReverseProxyConfig>) -> Result<()> {
-        println!("✅ Client connected and waiting for data forwarding through reverse proxy");
 
-        // Enhanced connection monitoring with better error handling
-        println!("🔍 Enhanced connection monitoring active");
-        println!("   Heartbeat: every 30s");
-        println!("   Health check: every 5s");
-        println!("   TCP keepalive: enabled");
+    /// Create optimized TCP connection with performance tuning
+    async fn create_optimized_tcp(&self) -> Result<TcpStream> {
+        let socket = TcpSocket::new_v4()?;
 
-        // Store pool stats and reconnect state
-        let mut last_heartbeat = std::time::Instant::now();
-        let mut last_successful_reconnect = std::time::Instant::now();
-        let mut consecutive_failures = 0u32;
-        const MAX_CONSECUTIVE_FAILURES: u32 = 3;
-        const RECONNECT_COOLDOWN: u64 = 60; // 60秒重连冷却
+        // TCP 优化参数
+        socket.set_nodelay(true)?; // 禁用 Nagle 算法
+        socket.set_recv_buffer_size(4 * 1024 * 1024)?; // 4MB 接收缓冲
+        socket.set_send_buffer_size(4 * 1024 * 1024)?; // 4MB 发送缓冲
+        socket.set_keepalive(true)?; // 启用 TCP keepalive
 
-        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-        let mut connection_check_interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            socket.connect(self.server_addr),
+        )
+        .await
+        .map_err(|_| ReverseProxyError::ConnectionFailed("Connection timeout".to_string()))??;
 
-        loop {
-            tokio::select! {
-                // Send heartbeat every 30 seconds
-                _ = heartbeat_interval.tick() => {
-                    if let Some(pool) = &self.yamux_pool {
-                        let pool_stats = pool.get_stats().await;
+        Ok(stream)
+    }
 
-                        // Check if we have any connections at all
-                        if pool_stats.pool_size == 0 {
-                            consecutive_failures += 1;
-                            error_println!("❌ No connections in pool (attempt {})", consecutive_failures);
-                        } else if pool_stats.active_connections == 0 {
-                            consecutive_failures += 1;
-                            error_println!("❌ No active connections (attempt {})", consecutive_failures);
-                        } else {
-                            // Only reset if connections look good
-                            last_heartbeat = std::time::Instant::now();
-                            consecutive_failures = 0; // Reset counter on success
-                            debug_println!("💓 Connection healthy - {}/{} connections active",
-                                pool_stats.active_connections, pool_stats.pool_size);
-                        }
+    /// Perform handshake with server
+    async fn do_handshake(
+        &self,
+        stream: &mut TcpStream,
+        config: &[ReverseProxyConfig],
+    ) -> Result<()> {
+        debug_println!("🔧 Starting handshake with {} configs", config.len());
 
-                        // Try to reconnect if heartbeat fails
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                            error_println!("⚠️  Too many consecutive failures ({}), attempting reconnection...", consecutive_failures);
-                            if self.reconnect_internal().await.is_err() {
-                                return Err(ReverseProxyError::ConnectionFailed(
-                                    format!("Failed to reconnect after {} consecutive failures", MAX_CONSECUTIVE_FAILURES)
-                                ).into());
-                            } else {
-                                last_successful_reconnect = std::time::Instant::now();
-                                consecutive_failures = 0;
-                                error_println!("✅ Reconnection successful");
-                            }
-                        }
-                    } else {
-                        error_println!("❌ Connection pool not available");
+        // 计算配置哈希
+        let config_json = serde_json::to_string(config)
+            .map_err(|e| ReverseProxyError::SerializationFailed(e.to_string()))?;
+        let config_hash = format!("{:x}", sha2::Sha256::digest(config_json.as_bytes()));
+
+        // 获取认证令牌
+        let token = self.auth_token.clone().unwrap_or_default();
+
+        // 生成 TOTP 验证码（如果配置了密钥）
+        let totp_code = self.totp_secret.as_ref().map(|secret| {
+            let totp = crate::utils::totp::Totp::from_base32(secret)
+                .unwrap_or_else(|_| crate::utils::totp::Totp::new(secret.as_bytes().to_vec()));
+            totp.generate_current()
+        });
+
+        // 发送 ClientHello
+        let hello = ControlMessage::ClientHello {
+            version: PROTOCOL_VERSION,
+            token,
+            totp_code,
+            proxies: config.to_vec(),
+            config_hash,
+        };
+
+        debug_println!("🔧 Sending ClientHello");
+        hello.write_to(stream).await?;
+
+        // 接收 ServerHello
+        debug_println!("🔧 Waiting for ServerHello...");
+        let response = ControlMessage::read_from(stream).await?;
+
+        match response {
+            ControlMessage::ServerHello {
+                status, message, ..
+            } => {
+                debug_println!(
+                    "🔧 Received ServerHello: status={:?}, message={}",
+                    status,
+                    message
+                );
+                match status {
+                    HandshakeStatus::Ok => {
+                        println!("✅ Handshake successful: {}", message);
+                        Ok(())
                     }
-                }
-
-                // Enhanced connection health check every 5 seconds
-                _ = connection_check_interval.tick() => {
-                    if let Some(pool) = &self.yamux_pool {
-                        let stats = pool.get_stats().await;
-                        debug_println!("📊 Connection pool status: {} active connections (pool size: {})",
-                            stats.active_connections, stats.pool_size);
-
-                        // Check if all connections are lost
-                        if stats.active_connections == 0 {
-                            error_println!("🚨 Critical: All yamux connections have been lost");
-
-                            // Check reconnect cooldown
-                            if last_successful_reconnect.elapsed().as_secs() < RECONNECT_COOLDOWN {
-                                let remaining = RECONNECT_COOLDOWN - last_successful_reconnect.elapsed().as_secs();
-                                error_println!("⏳ Reconnect cooldown active: {}s remaining", remaining);
-                            } else {
-                                if self.reconnect_internal().await.is_err() {
-                                    error_println!("❌ Emergency reconnection failed");
-                                } else {
-                                    last_successful_reconnect = std::time::Instant::now();
-                                    consecutive_failures = 0;
-                                    error_println!("✅ Emergency reconnection successful");
-                                }
-                            }
-                        }
-
-                        // Check if we haven't sent heartbeat recently
-                        let heartbeat_age = last_heartbeat.elapsed();
-                        if heartbeat_age > tokio::time::Duration::from_secs(60) {
-                            warning_println!("⚠️  No heartbeat sent for {} seconds, possible connection issue",
-                                heartbeat_age.as_secs());
-                        }
-
-                        // Check overall connection age
-                        let connection_age = last_successful_reconnect.elapsed();
-                        if connection_age > tokio::time::Duration::from_secs(3600) { // 1 hour
-                            debug_println!("📝 Connection has been active for {} hours",
-                                connection_age.as_secs() / 3600);
-                        }
-                    } else {
-                        error_println!("❌ Connection pool not available for health check");
-                    }
-                }
-
-                // Fallback sleep to prevent busy waiting
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                    // This is just a fallback to ensure we don't busy wait
-                    // The actual work is done by the interval timers above
+                    _ => Err(ReverseProxyError::HandshakeFailed(message).into()),
                 }
             }
+            _ => Err(
+                ReverseProxyError::HandshakeFailed("Invalid server response".to_string()).into(),
+            ),
         }
     }
 
-    
-    /// Attempt to reconnect to the server
-    async fn reconnect_internal(&mut self) -> Result<()> {
-        error_println!("🔄 Attempting to reconnect to server...");
+    /// Create optimized Yamux configuration
+    fn create_optimized_yamux_config() -> Config {
+        let mut config = Config::default();
 
-        // Try to recreate the connection pool
-        match YamuxConnectionPool::new(
-            self.server_addr,
-            &vec![], // We'll use the existing configs from the pool
-            self.yamux_pool_size,
-            self.selection_strategy,
-            &self.auth_token,
-        ).await {
-            Ok(new_pool) => {
-                // Replace the old pool
-                if let Some(pool) = self.yamux_pool.as_mut() {
-                    *pool = new_pool;
-                    error_println!("✅ Reconnection successful");
-                    Ok(())
-                } else {
-                    error_println!("❌ Failed to access connection pool");
-                    Err(ReverseProxyError::ConnectionFailed("Pool not initialized".to_string()).into())
+        // 高性能配置
+        config.set_max_connection_receive_window(None);
+        config.set_max_num_streams(2048);
+
+        debug_println!("🔧 Yamux config: max_window=4MB, max_streams=2048");
+
+        config
+    }
+
+    /// Handle a single tunnel stream from server
+    async fn handle_tunnel_stream(
+        yamux_stream: yamux::Stream,
+        proxy_configs: Vec<ReverseProxyConfig>,
+    ) -> Result<()> {
+        let mut stream = yamux_stream.compat();
+
+        // 1. 读取 4 字节协议头: [Type(1)] [Reserved(1)] [Port(2)]
+        let mut header = [0u8; 4];
+        stream.read_exact(&mut header).await.map_err(|e| {
+            ReverseProxyError::ConnectionFailed(format!("Failed to read header: {}", e))
+        })?;
+
+        let msg_type = header[0];
+        let _reserved = header[1];
+        let target_port = u16::from_be_bytes([header[2], header[3]]);
+
+        debug_println!(
+            "🔧 Tunnel request: Type=0x{:02x}, Port={}",
+            msg_type,
+            target_port
+        );
+        println!(
+            "DEBUG: Client Received Tunnel Request Type=0x{:02x} for Port={}",
+            msg_type, target_port
+        );
+
+        // 2. 根据类型处理
+        match msg_type {
+            0x01 => {
+                // TCP 直接转发
+            }
+            0x02 => {
+                // UDP forwarding
+                // 3. 查找目标本地服务配置
+                let target = proxy_configs
+                    .iter()
+                    .find(|c| c.server_port == target_port)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ReverseProxyError::ConnectionFailed(format!(
+                            "No local target for port {}",
+                            target_port
+                        ))
+                    })?;
+
+                // Read UDP payload length
+                let mut len_bytes = [0u8; 2];
+                stream.read_exact(&mut len_bytes).await.map_err(|e| {
+                    ReverseProxyError::ConnectionFailed(format!(
+                        "Failed to read UDP payload length: {}",
+                        e
+                    ))
+                })?;
+                let len = u16::from_be_bytes(len_bytes) as usize;
+
+                // Read payload
+                let mut payload = vec![0u8; len];
+                stream.read_exact(&mut payload).await.map_err(|e| {
+                    ReverseProxyError::ConnectionFailed(format!(
+                        "Failed to read UDP payload: {}",
+                        e
+                    ))
+                })?;
+
+                debug_println!(
+                    "🔧 UDP Forwarding {} bytes to local service {}:{}",
+                    payload.len(),
+                    target.local_host,
+                    target.local_port
+                );
+
+                // Create UDP socket to send to local target
+                let local_addr = format!("{}:{}", target.local_host, target.local_port);
+                let socket = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
+                    ReverseProxyError::ConnectionFailed(format!("Failed to bind UDP socket: {}", e))
+                })?;
+
+                // Send data
+                socket.send_to(&payload, &local_addr).await.map_err(|e| {
+                    ReverseProxyError::ConnectionFailed(format!("Failed to send UDP data: {}", e))
+                })?;
+
+                // Try to read response (with timeout)
+                let mut buf = [0u8; 65535];
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    socket.recv_from(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok((n, from))) => {
+                        println!("DEBUG: Client Received UDP response {} bytes from {}, sending back to server", n, from);
+                        // Write response back to stream
+                        if let Err(e) = stream.write_all(&buf[..n]).await {
+                            println!("FAILED to write UDP response to tunnel: {}", e);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        println!("UDP recv error or closed: {}", e);
+                    }
+                    Err(_) => {
+                        // Timeout - no response, just close
+                        println!(
+                            "UDP wait for response timed out on socket {:?}",
+                            socket.local_addr()
+                        );
+                    }
                 }
+
+                // Close stream
+                drop(stream);
+                // the server needs to keep the stream open.
+                //
+                // Given the current server implementation:
+                // "let _ = compat_stream.get_mut().shutdown().await;"
+                // The stream is closed. So we just handle the incoming packet.
+
+                return Ok(());
+            }
+            0x03 => {
+                return Err(ReverseProxyError::ConnectionFailed(
+                    "PROXY protocol not implemented".to_string(),
+                )
+                .into());
+            }
+            _ => {
+                return Err(ReverseProxyError::ConnectionFailed(format!(
+                    "Unknown protocol type 0x{:02x}",
+                    msg_type
+                ))
+                .into());
+            }
+        }
+
+        // 3. 查找目标本地服务配置
+        let target = proxy_configs
+            .iter()
+            .find(|c| c.server_port == target_port)
+            .cloned()
+            .ok_or_else(|| {
+                ReverseProxyError::ConnectionFailed(format!(
+                    "No local target for port {}",
+                    target_port
+                ))
+            })?;
+
+        debug_println!(
+            "🔧 Forwarding to local service {}:{}",
+            target.local_host,
+            target.local_port
+        );
+
+        // 4. 连接本地服务并双向转发
+        let local_addr = format!("{}:{}", target.local_host, target.local_port);
+        let mut local_stream = TcpStream::connect(&local_addr).await.map_err(|e| {
+            ReverseProxyError::ConnectionFailed(format!(
+                "Failed to connect to local service {}: {}",
+                local_addr, e
+            ))
+        })?;
+
+        match tokio::io::copy_bidirectional(&mut stream, &mut local_stream).await {
+            Ok((from_server, to_server)) => {
+                debug_println!(
+                    "🔧 Tunnel closed: {} bytes from server, {} bytes to server",
+                    from_server,
+                    to_server
+                );
             }
             Err(e) => {
-                error_println!("❌ Reconnection failed: {}", e);
-                // Wait before retrying
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                Err(e)
+                debug_println!("🔧 Tunnel copy error: {}", e);
             }
         }
-    }
 
-    
-        
+        Ok(())
     }
+}

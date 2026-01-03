@@ -1,8 +1,8 @@
 use crate::error::{Result, SystemError};
 use std::fs;
-use std::path::Path;
 
 /// Read a value from sysfs file
+#[allow(dead_code)]
 fn read_sysfs_value(path: &str) -> Result<String> {
     Ok(fs::read_to_string(path)
         .map_err(|e| SystemError::SystemCallFailed(format!("Failed to read {}: {}", path, e)))?
@@ -192,7 +192,7 @@ pub fn is_running_in_container() -> bool {
     #[cfg(target_os = "linux")]
     {
         // Check for Docker
-        if Path::new("/.dockerenv").exists() {
+        if std::path::Path::new("/.dockerenv").exists() {
             return true;
         }
 

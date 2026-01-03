@@ -2,12 +2,12 @@
 // 使用公开的互联网服务验证基本网络连接功能
 
 use anyhow::Result;
-use std::net::{IpAddr, Ipv4Addr};
-use tokio::net::TcpStream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::time::{timeout, Duration};
 use gsc_fq::config::loader::ProxySection;
 use gsc_fq::proxy::ProxyServerBuilder;
+use std::net::{IpAddr, Ipv4Addr};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
 
 /// 真实互联网服务端点配置
 #[allow(dead_code)]
@@ -34,7 +34,7 @@ const INTERNET_SERVICES: &[InternetService] = &[
         name: "google_dns",
         host: "8.8.8.8",
         port: 53,
-        test_path: "", // DNS查询
+        test_path: "",         // DNS查询
         expected_response: "", // DNS响应
         description: "Google DNS - 验证TCP连接到DNS服务",
     },
@@ -57,8 +57,10 @@ async fn test_internet_service_connectivity() -> Result<()> {
 
         match timeout(
             Duration::from_secs(10),
-            TcpStream::connect(format!("{}:{}", service.host, service.port))
-        ).await {
+            TcpStream::connect(format!("{}:{}", service.host, service.port)),
+        )
+        .await
+        {
             Ok(Ok(_stream)) => {
                 println!("✅ {} 连接成功", service.name);
 
@@ -91,17 +93,25 @@ async fn test_proxy_to_internet_service() -> Result<()> {
 
     // 选择可靠的测试服务
     let test_service = &INTERNET_SERVICES[0]; // httpbin.org
-    println!("📡 使用测试服务: {} ({})", test_service.name, test_service.description);
+    println!(
+        "📡 使用测试服务: {} ({})",
+        test_service.name, test_service.description
+    );
 
     // 1. 创建代理配置 - 转发到httpbin.org
     let proxy_config = ProxySection {
         local: "8080".to_string(),
         remote: format!("{}:{}", test_service.host, test_service.port),
         source_ip: None,
+        allow_ips: None,
+        max_conns_per_ip: None,
+        cps_limit: None,
     };
 
-    println!("🔧 代理配置: 本地端口 {} → 远程服务 {}",
-        proxy_config.local, proxy_config.remote);
+    println!(
+        "🔧 代理配置: 本地端口 {} → 远程服务 {}",
+        proxy_config.local, proxy_config.remote
+    );
 
     // 2. 启动代理服务器
     let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -124,8 +134,10 @@ async fn test_proxy_to_internet_service() -> Result<()> {
 
     match timeout(
         Duration::from_secs(15),
-        TcpStream::connect("127.0.0.1:8080")
-    ).await {
+        TcpStream::connect("127.0.0.1:8080"),
+    )
+    .await
+    {
         Ok(Ok(mut stream)) => {
             let connect_time = test_start.elapsed();
             println!("✅ 连接代理成功，耗时: {:?}", connect_time);
@@ -147,10 +159,19 @@ async fn test_proxy_to_internet_service() -> Result<()> {
             let mut reader = BufReader::new(stream);
             let mut response_line = String::new();
 
-            match timeout(Duration::from_secs(10), reader.read_line(&mut response_line)).await {
+            match timeout(
+                Duration::from_secs(10),
+                reader.read_line(&mut response_line),
+            )
+            .await
+            {
                 Ok(Ok(_)) => {
                     let read_time = read_start.elapsed();
-                    println!("📥 首行响应: {} (耗时: {:?})", response_line.trim(), read_time);
+                    println!(
+                        "📥 首行响应: {} (耗时: {:?})",
+                        response_line.trim(),
+                        read_time
+                    );
 
                     if response_line.starts_with("HTTP/1.1") {
                         println!("✅ 收到HTTP响应头 - 代理工作正常");
@@ -163,7 +184,9 @@ async fn test_proxy_to_internet_service() -> Result<()> {
                         // 读取几行内容
                         for _ in 0..10 {
                             buffer.clear();
-                            match timeout(Duration::from_secs(2), reader.read_line(&mut buffer)).await {
+                            match timeout(Duration::from_secs(2), reader.read_line(&mut buffer))
+                                .await
+                            {
                                 Ok(Ok(0)) => break,
                                 Ok(Ok(_)) => {
                                     body_content.push_str(&buffer);
@@ -176,14 +199,14 @@ async fn test_proxy_to_internet_service() -> Result<()> {
                             }
                         }
 
-                        if body_content.contains("httpbin.org") || body_content.contains("\"url\"") {
+                        if body_content.contains("httpbin.org") || body_content.contains("\"url\"")
+                        {
                             println!("✅ 代理成功转发到 httpbin.org 并收到正确响应数据");
                         } else if body_read {
                             println!("✅ 代理成功转发数据，响应长度: {} 字符", body_content.len());
                         } else {
                             println!("✅ 代理连接成功，收到HTTP响应");
                         }
-
                     } else {
                         println!("⚠️  收到非HTTP响应，但连接已建立");
                     }
@@ -230,8 +253,10 @@ async fn test_basic_network_functionality() -> Result<()> {
 
         match timeout(
             Duration::from_secs(5),
-            TcpStream::connect(format!("{}:{}", host, port))
-        ).await {
+            TcpStream::connect(format!("{}:{}", host, port)),
+        )
+        .await
+        {
             Ok(Ok(_stream)) => {
                 println!("✅ {} 连接成功", name);
                 successful_connections += 1;
@@ -247,7 +272,11 @@ async fn test_basic_network_functionality() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    println!("📊 连接测试结果: {}/{} 成功", successful_connections, services.len());
+    println!(
+        "📊 连接测试结果: {}/{} 成功",
+        successful_connections,
+        services.len()
+    );
 
     if successful_connections > 0 {
         println!("✅ 基础网络功能正常，可以建立TCP连接到真实互联网服务");

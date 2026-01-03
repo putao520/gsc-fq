@@ -1,7 +1,9 @@
 mod support;
 
 use anyhow::Result;
-use gsc_fq::config::loader::{ConfigFile, ServerSection, ReverseProxySection, ReverseProxyClientSection};
+use gsc_fq::config::loader::{
+    ConfigFile, ReverseProxyClientSection, ReverseProxySection, ServerSection,
+};
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -13,7 +15,7 @@ async fn test_token_authentication() -> Result<()> {
 
     // 设置测试环境
     std::env::set_var("YAMUX_POOL_SIZE", "1");
-    std::env::set_var("DEBUG", "true");  // 启用调试日志
+    std::env::set_var("DEBUG", "true"); // 启用调试日志
 
     // 1. 启动本地PingPong服务器
     let local_server = support::PingPongServer::start().await?;
@@ -21,8 +23,8 @@ async fn test_token_authentication() -> Result<()> {
     println!("📡 本地PingPong服务器启动在端口: {}", local_port);
 
     // 2. 测试端口配置
-    let proxy_external_port = 9100;  // 反向代理外部端口
-    let control_port = 9101;         // 控制端口
+    let proxy_external_port = 9100; // 反向代理外部端口
+    let control_port = 9101; // 控制端口
     let valid_token = "test-token-12345";
     let invalid_token = "invalid-token";
 
@@ -56,6 +58,8 @@ async fn test_token_authentication() -> Result<()> {
             debug: Some(true),
         }),
         proxies: vec![],
+        token: Some("".to_string()),
+        totp_secret: None,
         reverse_proxies: vec![ReverseProxySection {
             server: proxy_external_port.to_string(),
             local: format!("127.0.0.1:{}", local_port),
@@ -64,27 +68,29 @@ async fn test_token_authentication() -> Result<()> {
         reverse_proxy_server: None,
         reverse_proxy_client: Some(ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", control_port),
+            token: None,
+            totp_secret: None,
         }),
     };
 
     // 测试无效TOKEN连接（应该快速失败）
-    let invalid_result = tokio::time::timeout(
-        Duration::from_secs(3),
-        async {
-            let mut client = ReverseProxyClient::new_with_token(
-                server_addr,
-                invalid_config,
-                invalid_token.to_string(),
-            );
-            client.start().await
-        }
-    ).await;
+    let invalid_result = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut client = ReverseProxyClient::new_with_token(
+            server_addr,
+            invalid_config,
+            invalid_token.to_string(),
+        );
+        client.start().await
+    })
+    .await;
 
     match invalid_result {
         Ok(Err(e)) => {
             println!("✅ 无效TOKEN正确被拒绝: {:?}", e);
-            assert!(e.to_string().contains("Authentication") || e.to_string().contains("Token"),
-                   "应该返回认证相关错误");
+            assert!(
+                e.to_string().contains("Authentication") || e.to_string().contains("Token"),
+                "应该返回认证相关错误"
+            );
         }
         Ok(Ok(_)) => {
             panic!("❌ 无效TOKEN不应该成功连接");
@@ -103,6 +109,8 @@ async fn test_token_authentication() -> Result<()> {
             debug: Some(true),
         }),
         proxies: vec![],
+        token: Some("".to_string()),
+        totp_secret: None,
         reverse_proxies: vec![ReverseProxySection {
             server: proxy_external_port.to_string(),
             local: format!("127.0.0.1:{}", local_port),
@@ -111,16 +119,15 @@ async fn test_token_authentication() -> Result<()> {
         reverse_proxy_server: None,
         reverse_proxy_client: Some(ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", control_port),
+            token: None,
+            totp_secret: None,
         }),
     };
 
     // 启动有效TOKEN客户端
     let client_handle = tokio::spawn(async move {
-        let mut client = ReverseProxyClient::new_with_token(
-            server_addr,
-            valid_config,
-            valid_token.to_string(),
-        );
+        let mut client =
+            ReverseProxyClient::new_with_token(server_addr, valid_config, valid_token.to_string());
 
         let start_time = std::time::Instant::now();
         let result = client.start().await;
@@ -158,7 +165,10 @@ async fn test_token_authentication() -> Result<()> {
                     println!("📄 收到响应: {}", response.trim());
 
                     // 验证响应包含PingPong服务器的特征
-                    if response.contains("200") || response.contains("OK") || response.contains("pong") {
+                    if response.contains("200")
+                        || response.contains("OK")
+                        || response.contains("pong")
+                    {
                         println!("🎉 数据转发测试成功！收到PingPong服务器响应");
                     } else {
                         panic!("❌ 响应格式异常，未收到预期的PingPong响应: {}", response);
@@ -170,7 +180,10 @@ async fn test_token_authentication() -> Result<()> {
             }
         }
         Err(e) => {
-            panic!("❌ 无法连接到反向代理外部端口 {}: {:?}", proxy_external_port, e);
+            panic!(
+                "❌ 无法连接到反向代理外部端口 {}: {:?}",
+                proxy_external_port, e
+            );
         }
     }
 
@@ -230,7 +243,11 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
     let proxy_port = 9200;
     let control_port = 9201;
     let server_token = "server-main-token";
-    let allowed_tokens = vec!["token1".to_string(), "token2".to_string(), "token3".to_string()];
+    let allowed_tokens = vec![
+        "token1".to_string(),
+        "token2".to_string(),
+        "token3".to_string(),
+    ];
 
     // 3. 启动支持多TOKEN的服务器
     let allowed_tokens_clone = allowed_tokens.clone();
@@ -265,6 +282,8 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
                 debug: Some(true),
             }),
             proxies: vec![],
+            token: Some("".to_string()),
+            totp_secret: None,
             reverse_proxies: vec![ReverseProxySection {
                 server: proxy_port.to_string(),
                 local: format!("127.0.0.1:{}", local_port),
@@ -273,20 +292,16 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
             reverse_proxy_server: None,
             reverse_proxy_client: Some(ReverseProxyClientSection {
                 server: format!("127.0.0.1:{}", control_port),
+                token: None,
+                totp_secret: None,
             }),
         };
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(3),
-            async {
-                let mut client = ReverseProxyClient::new_with_token(
-                    server_addr,
-                    config,
-                    token.clone(),
-                );
-                client.start().await
-            }
-        ).await;
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut client = ReverseProxyClient::new_with_token(server_addr, config, token.clone());
+            client.start().await
+        })
+        .await;
 
         match result {
             Ok(Ok(_)) => {
@@ -314,6 +329,8 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
             debug: Some(true),
         }),
         proxies: vec![],
+        token: Some("".to_string()),
+        totp_secret: None,
         reverse_proxies: vec![ReverseProxySection {
             server: (proxy_port + 1).to_string(),
             local: format!("127.0.0.1:{}", local_port),
@@ -322,20 +339,20 @@ async fn test_multiple_allowed_tokens() -> Result<()> {
         reverse_proxy_server: None,
         reverse_proxy_client: Some(ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", control_port),
+            token: None,
+            totp_secret: None,
         }),
     };
 
-    let invalid_result = tokio::time::timeout(
-        Duration::from_secs(3),
-        async {
-            let mut client = ReverseProxyClient::new_with_token(
-                server_addr,
-                invalid_config,
-                invalid_token.to_string(),
-            );
-            client.start().await
-        }
-    ).await;
+    let invalid_result = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut client = ReverseProxyClient::new_with_token(
+            server_addr,
+            invalid_config,
+            invalid_token.to_string(),
+        );
+        client.start().await
+    })
+    .await;
 
     match invalid_result {
         Ok(Err(e)) => {

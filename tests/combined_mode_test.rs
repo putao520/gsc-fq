@@ -3,12 +3,10 @@ mod support;
 
 use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr};
-use support::{
-    PingPongServer, wait_for_port_ready,
-};
+use std::time::Duration;
+use support::{wait_for_port_ready, PingPongServer};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use std::time::Duration;
 
 /// 测试隧道代理和反向隧道代理同时工作
 ///
@@ -42,13 +40,16 @@ async fn test_combined_tunnel_and_reverse_proxy() -> Result<()> {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(false),
         }),
-        proxies: vec![
-            gsc_fq::config::loader::ProxySection {
-                local: tunnel_proxy_port.to_string(),
-                remote: format!("127.0.0.1:{}", tunnel_target_port),
-                source_ip: None,
-            }
-        ],
+        token: Some("".to_string()),
+        totp_secret: None,
+        proxies: vec![gsc_fq::config::loader::ProxySection {
+            local: tunnel_proxy_port.to_string(),
+            remote: format!("127.0.0.1:{}", tunnel_target_port),
+            source_ip: None,
+            allow_ips: None,
+            max_conns_per_ip: None,
+            cps_limit: None,
+        }],
         reverse_proxies: vec![],
         reverse_proxy_server: None,
         reverse_proxy_client: None,
@@ -75,7 +76,8 @@ async fn test_combined_tunnel_and_reverse_proxy() -> Result<()> {
 
     let reverse_server_handle = tokio::spawn(async move {
         let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        let mut reverse_server = gsc_fq::reverse_proxy::ReverseProxyServer::new(bind_ip, reverse_server_port);
+        let mut reverse_server =
+            gsc_fq::reverse_proxy::ReverseProxyServer::new(bind_ip, reverse_server_port);
 
         if let Err(e) = reverse_server.start().await {
             eprintln!("❌ 反向代理服务端失败: {}", e);
@@ -86,25 +88,28 @@ async fn test_combined_tunnel_and_reverse_proxy() -> Result<()> {
     println!("🔄 启动反向隧道代理客户端...");
     let reverse_config = gsc_fq::config::loader::ConfigFile {
         server: None,
+        token: Some("".to_string()),
+        totp_secret: None,
         proxies: vec![],
-        reverse_proxies: vec![
-            gsc_fq::config::loader::ReverseProxySection {
-                server: reverse_proxy_port.to_string(),
-                local: format!("127.0.0.1:{}", target_port),
-                source_ip: None,
-            }
-        ],
+        reverse_proxies: vec![gsc_fq::config::loader::ReverseProxySection {
+            server: reverse_proxy_port.to_string(),
+            local: format!("127.0.0.1:{}", target_port),
+            source_ip: None,
+        }],
         reverse_proxy_server: None,
         reverse_proxy_client: Some(gsc_fq::config::loader::ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", reverse_server_port),
+            token: None,
+            totp_secret: None,
         }),
     };
 
     let reverse_client_handle = tokio::spawn(async move {
         let server_addr = format!("127.0.0.1:{}", reverse_server_port);
-        let server_addr: std::net::SocketAddr = server_addr.parse()
-            .expect("Invalid server address");
-        let mut reverse_client = gsc_fq::reverse_proxy::ReverseProxyClient::new(server_addr, reverse_config);
+        let server_addr: std::net::SocketAddr =
+            server_addr.parse().expect("Invalid server address");
+        let mut reverse_client =
+            gsc_fq::reverse_proxy::ReverseProxyClient::new(server_addr, reverse_config);
 
         if let Err(e) = reverse_client.start().await {
             eprintln!("❌ 反向代理客户端失败: {}", e);
@@ -220,7 +225,10 @@ async fn test_concurrent_access(tunnel_port: u16, reverse_port: u16) -> Result<(
         let port = tunnel_port;
         set.spawn(async move {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", port)).await {
-                let request = format!("GET /test{} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", i);
+                let request = format!(
+                    "GET /test{} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                    i
+                );
                 let _ = stream.write_all(request.as_bytes()).await;
                 println!("隧道代理并发请求 {} 发送完成", i);
             }
@@ -232,7 +240,10 @@ async fn test_concurrent_access(tunnel_port: u16, reverse_port: u16) -> Result<(
         let port = reverse_port;
         set.spawn(async move {
             if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", port)).await {
-                let request = format!("GET /test{} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", i);
+                let request = format!(
+                    "GET /test{} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                    i
+                );
                 let _ = stream.write_all(request.as_bytes()).await;
                 println!("反向隧道代理并发请求 {} 发送完成", i);
             }

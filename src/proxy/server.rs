@@ -6,7 +6,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::{TcpListener, TcpSocket};
+use tokio::net::{TcpListener, TcpSocket, UdpSocket};
 use tokio::signal;
 use tokio::sync::broadcast;
 
@@ -56,6 +56,9 @@ impl ProxyServer {
             local_port,
             remote_addr,
             source_ip,
+            proxy_config.allow_ips.clone(),
+            proxy_config.max_conns_per_ip,
+            proxy_config.cps_limit,
         )?;
 
         self.proxy_instances.push(instance);
@@ -279,6 +282,9 @@ impl ProxyInstance {
         local_port: u16,
         remote_addr: SocketAddr,
         source_ip: Option<IpAddr>,
+        allow_ips: Option<Vec<String>>,
+        max_conns_per_ip: Option<usize>,
+        cps_limit: Option<f64>,
     ) -> Result<Self> {
         let bind_addr = SocketAddr::new(bind_ip, local_port);
 
@@ -291,6 +297,9 @@ impl ProxyInstance {
             remote_addr,
             source_ip,
             connection_pool.clone(),
+            allow_ips,
+            max_conns_per_ip,
+            cps_limit,
         ));
 
         Ok(Self {
@@ -309,18 +318,12 @@ impl ProxyInstance {
 
         // Start connection pool if enabled
         if let Some(pool) = &self.connection_pool {
-            debug_println!(
-                "Starting connection pool for {}:{} (size: {})",
-                self.bind_addr,
-                pool.get_stats().total_created,
-                ""
-            );
-            pool.start().await?;
-            let stats = pool.get_stats();
-            debug_println!(
-                "Connection pool preheated: {} connections created",
-                stats.total_created
-            );
+            let pool_clone = pool.clone();
+            tokio::spawn(async move {
+                if let Err(e) = pool_clone.start().await {
+                    debug_println!("Connection pool background start failed: {}", e);
+                }
+            });
         }
 
         // Create optimized TCP listener
@@ -331,10 +334,52 @@ impl ProxyInstance {
 
         println!(
             "📍 Proxy listening on {} → {}",
-            local_addr,
-            self.remote_addr
+            local_addr, self.remote_addr
         );
         debug_println!("Proxy instance {} started successfully", local_addr);
+
+        // Create UDP listener on the same port
+        let udp_socket = Arc::new(UdpSocket::bind(&self.bind_addr).await.map_err(|e| {
+            NetworkError::ListenFailed(format!("Failed to bind UDP port {}: {}", self.bind_addr, e))
+        })?);
+
+        println!(
+            "📍 Proxy (UDP) listening on {} → {}",
+            self.bind_addr, self.remote_addr
+        );
+
+        let udp_handler = self.connection_handler.clone();
+        let udp_socket_clone = udp_socket.clone();
+        let mut udp_shutdown_rx = shutdown_rx.resubscribe();
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 65535];
+            loop {
+                tokio::select! {
+                    msg = udp_socket_clone.recv_from(&mut buf) => {
+                        match msg {
+                            Ok((n, addr)) => {
+                                let data = buf[..n].to_vec();
+                                let handler = udp_handler.clone();
+                                let socket = udp_socket_clone.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = handler.handle_udp_packet(data, addr, socket).await {
+                                        error_println!("UDP handling error from {}: {}", addr, e);
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                error_println!("UDP accept error: {}", e);
+                            }
+                        }
+                    }
+                    _ = udp_shutdown_rx.recv() => {
+                        debug_println!("UDP handler shutting down");
+                        break;
+                    }
+                }
+            }
+        });
 
         loop {
             tokio::select! {
@@ -554,7 +599,16 @@ mod tests {
         let remote_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 8080);
         let source_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 50));
 
-        let instance = ProxyInstance::new(bind_ip, 8080, remote_addr, Some(source_ip)).unwrap();
+        let instance = ProxyInstance::new(
+            bind_ip,
+            8080,
+            remote_addr,
+            Some(source_ip),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(instance.get_bind_addr().ip(), bind_ip);
         assert_eq!(instance.get_bind_addr().port(), 8080);
@@ -571,6 +625,9 @@ mod tests {
             local: "8080".to_string(),
             remote: "192.168.1.100:8080".to_string(),
             source_ip: None,
+            allow_ips: None,
+            max_conns_per_ip: None,
+            cps_limit: None,
         };
 
         let server = ProxyServerBuilder::new()
@@ -606,7 +663,8 @@ mod tests {
             8080,
         );
 
-        let instance = ProxyInstance::new(bind_ip, 8080, remote_addr, None).unwrap();
+        let instance =
+            ProxyInstance::new(bind_ip, 8080, remote_addr, None, None, None, None).unwrap();
 
         assert_eq!(instance.get_bind_addr().ip(), bind_ip);
         assert_eq!(instance.get_remote_addr(), remote_addr);

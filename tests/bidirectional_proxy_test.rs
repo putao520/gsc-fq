@@ -1,13 +1,13 @@
 mod support;
 
 use anyhow::Result;
+use gsc_fq::config::loader::ConfigFile;
+use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 use support::wait_for_port_ready;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
-use std::time::Duration;
-use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
-use gsc_fq::config::loader::ConfigFile;
 
 const PROXY_SERVER_PORT: u16 = 9001;
 const PROXY_CLIENT_LISTEN_PORT: u16 = 9000;
@@ -32,12 +32,16 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
     };
 
     let config = ConfigFile {
+        token: Some("".to_string()),
+        totp_secret: None,
         server: None,
         proxies: vec![],
         reverse_proxies: vec![proxy_config],
         reverse_proxy_server: None,
         reverse_proxy_client: Some(gsc_fq::config::loader::ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", PROXY_SERVER_PORT),
+            token: None,
+            totp_secret: None,
         }),
     };
 
@@ -69,13 +73,14 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
 
         let mut stream = timeout(
             Duration::from_secs(5),
-            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
-        ).await??;
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
+        )
+        .await??;
 
-        // 发送端口头部
-        let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
-        stream.write_all(&port_bytes).await?;
-        stream.flush().await?;
+        // 发送端口头部 (不需要，因为每个端口独立监听)
+        // let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
+        // stream.write_all(&port_bytes).await?;
+        // stream.flush().await?;
 
         // 客户端发送多个消息
         let messages = vec![
@@ -85,7 +90,7 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
         ];
 
         for (i, msg) in messages.iter().enumerate() {
-            println!("📤 客户端发送消息 {}: {}", i+1, msg);
+            println!("📤 客户端发送消息 {}: {}", i + 1, msg);
             stream.write_all(msg.as_bytes()).await?;
             stream.flush().await?;
 
@@ -106,7 +111,11 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
         stream.flush().await?;
 
         let mut binary_response = vec![0u8; binary_data.len()];
-        timeout(Duration::from_secs(3), stream.read_exact(&mut binary_response)).await??;
+        timeout(
+            Duration::from_secs(3),
+            stream.read_exact(&mut binary_response),
+        )
+        .await??;
         println!("📥 客户端收到二进制响应: {:?}", binary_response);
         assert_eq!(binary_data, binary_response, "二进制数据应该完全匹配");
 
@@ -121,20 +130,26 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
         let handle = tokio::spawn(async move {
             let mut stream = timeout(
                 Duration::from_secs(3),
-                tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
-            ).await.unwrap().unwrap();
+                tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
-            // 发送端口头部
-            let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
-            stream.write_all(&port_bytes).await.unwrap();
-            stream.flush().await.unwrap();
+            // 发送端口头部 (不需要)
+            // let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
+            // stream.write_all(&port_bytes).await.unwrap();
+            // stream.flush().await.unwrap();
 
             let msg = format!("Concurrent message {}", i);
             stream.write_all(msg.as_bytes()).await.unwrap();
             stream.flush().await.unwrap();
 
             let mut response = vec![0u8; msg.len()];
-            timeout(Duration::from_secs(3), stream.read_exact(&mut response)).await.unwrap().unwrap();
+            timeout(Duration::from_secs(3), stream.read_exact(&mut response))
+                .await
+                .unwrap()
+                .unwrap();
 
             let response_str = String::from_utf8_lossy(&response);
             println!("并发连接{} 收到: {}", i, response_str.trim());
