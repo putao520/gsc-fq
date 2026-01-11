@@ -8,6 +8,7 @@ use gsc_fq::config::loader::{
 };
 use gsc_fq::proxy::ProxyInstance;
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -107,6 +108,7 @@ impl Drop for ProxyHandle {
 pub struct TestServer {
     addr: SocketAddr,
     handle: Option<JoinHandle<()>>,
+    expected_hash: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -141,7 +143,50 @@ impl TestServer {
         Ok(Self {
             addr,
             handle: Some(handle),
+            expected_hash: vec![],
         })
+    }
+
+    /// 启动一个文件服务器，生成指定大小的数据并计算 SHA256
+    pub async fn start_file_server(size: usize) -> io::Result<Self> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let addr = listener.local_addr()?;
+
+        // 生成可预测的数据模式（用于验证完整性）
+        let mut data = Vec::with_capacity(size);
+        for i in 0..size {
+            data.push((i % 256) as u8);
+        }
+        let expected_hash = Sha256::digest(&data).to_vec();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((mut socket, _)) => {
+                        let data_clone = data.clone();
+                        tokio::spawn(async move {
+                            // 发送数据
+                            if socket.write_all(&data_clone).await.is_err() {
+                                return;
+                            }
+                            let _ = socket.flush().await;
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            addr,
+            handle: Some(handle),
+            expected_hash,
+        })
+    }
+
+    /// 获取预期数据的 SHA256 hash
+    pub fn expected_hash(&self) -> &[u8] {
+        &self.expected_hash
     }
 
     pub fn addr(&self) -> SocketAddr {
