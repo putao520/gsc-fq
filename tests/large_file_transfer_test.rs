@@ -82,8 +82,8 @@ async fn test_large_file_transfer_with_resource_monitoring() -> Result<()> {
     let initial_memory = get_memory_usage()?;
     println!("  初始内存: {} MB", initial_memory);
 
-    // 6. 通过代理下载文件
-    println!("\n🔄 开始文件传输...");
+    // 6. 通过代理下载文件（流式处理，不缓存整个文件）
+    println!("\n🔄 开始文件传输（流式处理）...");
     let start_time = std::time::Instant::now();
 
     // 连接到代理
@@ -92,9 +92,9 @@ async fn test_large_file_transfer_with_resource_monitoring() -> Result<()> {
         tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
     ).await??;
 
-    // 下载文件
-    let mut downloaded_data = Vec::with_capacity(FILE_SIZE_10MB);
-    let mut buffer = vec![0u8; 64 * 1024]; // 64KB 缓冲区
+    // 流式下载：使用固定大小缓冲区，边读边计算 hash
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB 固定缓冲区
+    let mut hasher = Sha256::new();
     let mut total_bytes = 0;
 
     loop {
@@ -107,8 +107,9 @@ async fn test_large_file_transfer_with_resource_monitoring() -> Result<()> {
             break;
         }
 
+        // 立即更新 hash（不缓存数据）
+        hasher.update(&buffer[..n]);
         total_bytes += n;
-        downloaded_data.extend_from_slice(&buffer[..n]);
 
         // 进度输出（每 1MB）
         if total_bytes % (1024 * 1024) == 0 {
@@ -134,9 +135,9 @@ async fn test_large_file_transfer_with_resource_monitoring() -> Result<()> {
     println!("  传输时间: {:.2}s", elapsed.as_secs_f64());
     println!("  平均吞吐: {:.2} MB/s", throughput);
 
-    // 7. 验证数据完整性
-    println!("\n🔍 验证数据完整性...");
-    let downloaded_hash = Sha256::digest(&downloaded_data);
+    // 7. 验证数据完整性（使用流式 hash）
+    println!("\n🔍 验证数据完整性（流式 hash）...");
+    let downloaded_hash = hasher.finalize();
     println!("  下载文件 SHA256: {:x}", downloaded_hash);
 
     // 生成期望的数据模式并验证
@@ -150,14 +151,14 @@ async fn test_large_file_transfer_with_resource_monitoring() -> Result<()> {
     println!("  最终内存: {} MB", final_memory);
     println!("  内存增长: {} MB", final_memory - initial_memory);
 
-    // 内存增长应该合理（10MB 文件 + 开销 ≈ 15-20MB）
+    // 内存增长应该很小（流式处理，只使用 64KB 缓冲区）
     let memory_increase = final_memory - initial_memory;
     assert!(
-        memory_increase < 50.0,
-        "内存增长过大: {} MB，可能存在内存泄露",
+        memory_increase < 5.0,
+        "内存增长过大: {} MB，可能没有使用流式处理",
         memory_increase
     );
-    println!("✅ 内存使用正常");
+    println!("✅ 内存使用正常（流式处理：{} MB 增长）", memory_increase);
 
     // 9. 检查连接池状态
     println!("\n🔍 检查连接池健康状态...");
