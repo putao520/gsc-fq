@@ -2,12 +2,12 @@
 // 使用真实互联网服务验证隧道代理(Tunnel Proxy)功能
 
 use anyhow::Result;
-use std::net::{IpAddr, Ipv4Addr};
-use tokio::net::TcpStream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::time::{timeout, Duration};
 use gsc_fq::config::loader::ProxySection;
 use gsc_fq::proxy::ProxyServerBuilder;
+use std::net::{IpAddr, Ipv4Addr};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
 
 /// 真实互联网服务端点配置
 #[derive(Clone, Copy)]
@@ -23,7 +23,7 @@ struct TunnelService {
 const TUNNEL_SERVICES: &[TunnelService] = &[
     TunnelService {
         name: "httpbin_get",
-        host: "3.217.172.174",  // httpbin.org的IP地址
+        host: "3.217.172.174", // httpbin.org的IP地址
         port: 80,
         description: "HTTP GET请求测试服务",
         test_data: b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
@@ -37,7 +37,7 @@ const TUNNEL_SERVICES: &[TunnelService] = &[
     },
     TunnelService {
         name: "httpbin_ip",
-        host: "100.28.16.212",   // httpbin.org的第三个IP地址
+        host: "100.28.16.212", // httpbin.org的第三个IP地址
         port: 80,
         description: "HTTP IP查询服务",
         test_data: b"GET /ip HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
@@ -50,7 +50,12 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
 
     // 测试多个真实互联网服务
     for (i, service) in TUNNEL_SERVICES.iter().enumerate() {
-        println!("\n📡 测试服务 #{}: {} - {}", i+1, service.name, service.description);
+        println!(
+            "\n📡 测试服务 #{}: {} - {}",
+            i + 1,
+            service.name,
+            service.description
+        );
 
         let proxy_port = 8080 + i as u16; // 每个测试使用不同的代理端口
 
@@ -59,10 +64,15 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
             local: proxy_port.to_string(),
             remote: format!("{}:{}", service.host, service.port),
             source_ip: None,
+            allow_ips: None,
+            max_conns_per_ip: None,
+            cps_limit: None,
         };
 
-        println!("🔧 代理配置: 本地端口 {} → 真实服务 {}",
-            proxy_config.local, proxy_config.remote);
+        println!(
+            "🔧 代理配置: 本地端口 {} → 真实服务 {}",
+            proxy_config.local, proxy_config.remote
+        );
 
         // 2. 启动代理服务器
         let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -86,8 +96,10 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
 
         match timeout(
             Duration::from_secs(10),
-            TcpStream::connect(format!("127.0.0.1:{}", proxy_port))
-        ).await {
+            TcpStream::connect(format!("127.0.0.1:{}", proxy_port)),
+        )
+        .await
+        {
             Ok(Ok(mut stream)) => {
                 let connect_time = test_start.elapsed();
                 println!("✅ 连接代理成功，耗时: {:?}", connect_time);
@@ -104,10 +116,19 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
                 let mut reader = BufReader::new(&mut stream);
                 let mut response_line = String::new();
 
-                match timeout(Duration::from_secs(15), reader.read_line(&mut response_line)).await {
+                match timeout(
+                    Duration::from_secs(15),
+                    reader.read_line(&mut response_line),
+                )
+                .await
+                {
                     Ok(Ok(_)) => {
                         let read_time = read_start.elapsed();
-                        println!("📥 收到响应首行: {} (耗时: {:?})", response_line.trim(), read_time);
+                        println!(
+                            "📥 收到响应首行: {} (耗时: {:?})",
+                            response_line.trim(),
+                            read_time
+                        );
 
                         if response_line.starts_with("HTTP/1.1") {
                             println!("✅ 收到真实HTTP响应 - 隧道代理工作正常");
@@ -120,12 +141,17 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
                             // 读取响应内容
                             while lines_read < 10 {
                                 buffer.clear();
-                                match timeout(Duration::from_secs(2), reader.read_line(&mut buffer)).await {
+                                match timeout(Duration::from_secs(2), reader.read_line(&mut buffer))
+                                    .await
+                                {
                                     Ok(Ok(0)) => break,
                                     Ok(_) => {
                                         body_content.push_str(&buffer);
                                         lines_read += 1;
-                                        if buffer.contains("}") || buffer.contains("</html>") || buffer.contains("\r\n\r\n") {
+                                        if buffer.contains("}")
+                                            || buffer.contains("</html>")
+                                            || buffer.contains("\r\n\r\n")
+                                        {
                                             break;
                                         }
                                     }
@@ -134,18 +160,25 @@ async fn test_tunnel_proxy_to_real_services() -> Result<()> {
                             }
 
                             // 验证响应内容
-                            if body_content.contains("httpbin.org") || body_content.contains("\"origin\"") || body_content.contains("\"url\"") {
+                            if body_content.contains("httpbin.org")
+                                || body_content.contains("\"origin\"")
+                                || body_content.contains("\"url\"")
+                            {
                                 println!("✅ 隧道代理成功转发到 httpbin.org 并收到正确数据");
                             } else if body_content.len() > 10 {
-                                println!("✅ 隧道代理成功转发数据，响应长度: {} 字符", body_content.len());
+                                println!(
+                                    "✅ 隧道代理成功转发数据，响应长度: {} 字符",
+                                    body_content.len()
+                                );
                             } else {
                                 println!("✅ 隧道代理连接成功，收到HTTP响应");
                             }
 
                             let total_time = test_start.elapsed();
-                            println!("📊 性能统计: 总耗时={:?}, 连接={:?}, 写入={:?}, 读取={:?}",
-                                total_time, connect_time, write_time, read_time);
-
+                            println!(
+                                "📊 性能统计: 总耗时={:?}, 连接={:?}, 写入={:?}, 读取={:?}",
+                                total_time, connect_time, write_time, read_time
+                            );
                         } else {
                             println!("⚠️  收到非HTTP响应: {}", response_line.trim());
                         }
@@ -192,6 +225,9 @@ async fn test_tunnel_proxy_concurrent_connections() -> Result<()> {
         local: proxy_port.to_string(),
         remote: format!("{}:{}", test_service.host, test_service.port),
         source_ip: None,
+        allow_ips: None,
+        max_conns_per_ip: None,
+        cps_limit: None,
     };
 
     // 启动代理服务器
@@ -226,8 +262,10 @@ async fn test_tunnel_proxy_concurrent_connections() -> Result<()> {
 
             match timeout(
                 Duration::from_secs(5),
-                TcpStream::connect(format!("127.0.0.1:{}", proxy_port))
-            ).await {
+                TcpStream::connect(format!("127.0.0.1:{}", proxy_port)),
+            )
+            .await
+            {
                 Ok(Ok(mut stream)) => {
                     let conn_time = conn_start.elapsed();
 
@@ -246,10 +284,10 @@ async fn test_tunnel_proxy_concurrent_connections() -> Result<()> {
                     let mut reader = BufReader::new(stream);
                     let mut response_line = String::new();
 
-                    match timeout(Duration::from_secs(3), reader.read_line(&mut response_line)).await {
-                        Ok(Ok(_)) if response_line.starts_with("HTTP/1.1") => {
-                            Ok((conn_time, true))
-                        }
+                    match timeout(Duration::from_secs(3), reader.read_line(&mut response_line))
+                        .await
+                    {
+                        Ok(Ok(_)) if response_line.starts_with("HTTP/1.1") => Ok((conn_time, true)),
                         _ => Ok((conn_time, false)),
                     }
                 }
@@ -291,15 +329,24 @@ async fn test_tunnel_proxy_concurrent_connections() -> Result<()> {
     println!("\n📊 并发连接测试结果:");
     println!("   总连接数: {}", concurrent_connections);
     println!("   成功连接数: {}", successful_connections);
-    println!("   成功率: {:.1}%", (successful_connections as f64 / concurrent_connections as f64) * 100.0);
+    println!(
+        "   成功率: {:.1}%",
+        (successful_connections as f64 / concurrent_connections as f64) * 100.0
+    );
     println!("   总耗时: {:?}", total_time);
 
     if !connection_times.is_empty() {
         let total_conn_time: Duration = connection_times.iter().sum();
         let avg_conn_time = total_conn_time / connection_times.len() as u32;
         println!("   平均连接时间: {:?}", avg_conn_time);
-        println!("   最快连接时间: {:?}", connection_times.iter().min().unwrap());
-        println!("   最慢连接时间: {:?}", connection_times.iter().max().unwrap());
+        println!(
+            "   最快连接时间: {:?}",
+            connection_times.iter().min().unwrap()
+        );
+        println!(
+            "   最慢连接时间: {:?}",
+            connection_times.iter().max().unwrap()
+        );
     }
 
     if successful_connections == concurrent_connections {
@@ -325,6 +372,9 @@ async fn test_tunnel_proxy_data_integrity() -> Result<()> {
         local: proxy_port.to_string(),
         remote: "3.217.172.174:80".to_string(), // 使用IP地址
         source_ip: None,
+        allow_ips: None,
+        max_conns_per_ip: None,
+        cps_limit: None,
     };
 
     // 启动代理服务器
@@ -342,12 +392,16 @@ async fn test_tunnel_proxy_data_integrity() -> Result<()> {
     println!("✅ 隧道代理服务器已启动");
 
     // 测试数据完整性
-    println!("📤 测试数据完整性: {}", std::str::from_utf8(test_data).unwrap_or("invalid utf8"));
+    println!(
+        "📤 测试数据完整性: {}",
+        std::str::from_utf8(test_data).unwrap_or("invalid utf8")
+    );
 
     let mut stream = timeout(
         Duration::from_secs(10),
-        TcpStream::connect(format!("127.0.0.1:{}", proxy_port))
-    ).await??;
+        TcpStream::connect(format!("127.0.0.1:{}", proxy_port)),
+    )
+    .await??;
 
     // 发送测试数据
     stream.write_all(test_data).await?;
@@ -360,7 +414,12 @@ async fn test_tunnel_proxy_data_integrity() -> Result<()> {
     let mut reader = BufReader::new(&mut stream);
     let mut response_line = String::new();
 
-    match timeout(Duration::from_secs(10), reader.read_line(&mut response_line)).await {
+    match timeout(
+        Duration::from_secs(10),
+        reader.read_line(&mut response_line),
+    )
+    .await
+    {
         Ok(Ok(_)) => {
             if response_line.starts_with("HTTP/1.1") {
                 println!("✅ 收到HTTP响应，隧道代理数据转发成功");
@@ -385,8 +444,18 @@ async fn test_tunnel_proxy_different_protocols() -> Result<()> {
     println!("🌐 测试隧道代理支持不同协议...");
 
     let services = vec![
-        ("HTTP", "3.217.172.174", 80, b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"),
-        ("HTTPS", "3.217.172.174", 443, b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n"),
+        (
+            "HTTP",
+            "3.217.172.174",
+            80,
+            b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
+        ),
+        (
+            "HTTPS",
+            "3.217.172.174",
+            443,
+            b"GET /get HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
+        ),
     ];
 
     for (protocol, host, port, test_data) in services {
@@ -398,6 +467,9 @@ async fn test_tunnel_proxy_different_protocols() -> Result<()> {
             local: proxy_port.to_string(),
             remote: format!("{}:{}", host, port),
             source_ip: None,
+            allow_ips: None,
+            max_conns_per_ip: None,
+            cps_limit: None,
         };
 
         let mut instance = ProxyServerBuilder::new()
@@ -413,8 +485,10 @@ async fn test_tunnel_proxy_different_protocols() -> Result<()> {
 
         match timeout(
             Duration::from_secs(5),
-            TcpStream::connect(format!("127.0.0.1:{}", proxy_port))
-        ).await {
+            TcpStream::connect(format!("127.0.0.1:{}", proxy_port)),
+        )
+        .await
+        {
             Ok(Ok(mut stream)) => {
                 println!("✅ {} 协议代理连接成功", protocol);
 

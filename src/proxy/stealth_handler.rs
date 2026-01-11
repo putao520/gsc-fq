@@ -44,7 +44,10 @@ impl StealthHandler {
                     return Self::normal_forwarding(client, remote).await;
                 }
                 Err(e) => {
-                    debug_println!("⚠️  Pool acquisition failed: {}, falling back to direct connection", e);
+                    debug_println!(
+                        "⚠️  Pool acquisition failed: {}, falling back to direct connection",
+                        e
+                    );
                     // Fall through to direct connection
                 }
             }
@@ -117,8 +120,8 @@ impl StealthHandler {
     async fn enter_blackhole_mode(mut client: TcpStream) -> Result<(), ProxyError> {
         use tokio::time;
 
-        // Random delay between 2-30 minutes
-        let delay_seconds = pseudo_random_range(120, 1800);
+        // Random delay between 5-30 seconds (reduced from minutes to prevent resource exhaustion)
+        let delay_seconds = pseudo_random_range(5, 30);
         let delay = Duration::from_secs(delay_seconds);
 
         let client_addr = client
@@ -173,16 +176,26 @@ impl StealthHandler {
 
         debug_println!(
             "📡 Starting forwarding: {} <-> {}",
-            client_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string()),
-            remote_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string())
+            client_addr
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            remote_addr
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
         );
+
+        // TCP 优化在连接创建时已应用（socket2 层面）
 
         let (mut client_read, mut client_write) = client.into_split();
         let (mut remote_read, mut remote_write) = remote.into_split();
 
         // Format addresses for logging
-        let client_addr_str = client_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
-        let remote_addr_str = remote_addr.map(|a| a.to_string()).unwrap_or_else(|| "unknown".to_string());
+        let client_addr_str = client_addr
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let remote_addr_str = remote_addr
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let client_to_remote = {
             let client_addr = client_addr_str.clone();
@@ -214,8 +227,24 @@ impl StealthHandler {
             })
         };
 
-        // Wait for both directions
-        let _ = tokio::join!(client_to_remote, remote_to_client);
+        // 设定总空闲超时：如果 10 分钟都没有任何数据交互，强制关闭
+        // 注意：这是兜底方案，防止任务永远无法退出
+        let idle_timeout = Duration::from_secs(600);
+
+        // Wait for both directions with a global timeout safety net
+        let result = tokio::time::timeout(idle_timeout, async {
+            tokio::join!(client_to_remote, remote_to_client)
+        })
+        .await;
+
+        if result.is_err() {
+            debug_println!(
+                "⏰ Connection {} ↔ {} timed out after {}s of inactivity",
+                client_addr_str,
+                remote_addr_str,
+                idle_timeout.as_secs()
+            );
+        }
 
         debug_println!(
             "📊 Connection closed: {} ↔ {}",

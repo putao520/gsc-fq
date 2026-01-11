@@ -1,12 +1,14 @@
 mod support;
 
 use anyhow::Result;
+use gsc_fq::config::loader::{
+    ConfigFile, ReverseProxyClientSection, ReverseProxySection, ServerSection,
+};
+use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
+use std::time::Duration;
 use support::PingPongServer;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use std::time::Duration;
-use gsc_fq::config::loader::{ConfigFile, ServerSection, ReverseProxySection, ReverseProxyClientSection};
-use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 
 /// 验证最简单的反向代理：客户端和服务器使用相同端口
 #[tokio::test]
@@ -44,7 +46,7 @@ async fn test_simplest_reverse_proxy() -> Result<()> {
 
     // 4. 配置最简单的反向代理：客户端和服务器都使用相同端口
     let reverse_proxy_config = vec![ReverseProxySection {
-        server: proxy_port.to_string(),        // 服务器监听端口
+        server: proxy_port.to_string(),             // 服务器监听端口
         local: format!("127.0.0.1:{}", local_port), // 本地服务IP:端口
         source_ip: None,
     }];
@@ -54,11 +56,15 @@ async fn test_simplest_reverse_proxy() -> Result<()> {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
         }),
+        token: Some("".to_string()),
+        totp_secret: None,
         proxies: vec![],
         reverse_proxies: reverse_proxy_config,
         reverse_proxy_server: None,
         reverse_proxy_client: Some(ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", control_port),
+            token: None,
+            totp_secret: None,
         }),
     };
 
@@ -123,7 +129,6 @@ async fn test_simplest_reverse_proxy() -> Result<()> {
                         if response_body.contains("PONG") {
                             println!("✅ 反向代理成功转发了数据");
                         }
-
                     } else {
                         println!("❌ 响应异常: {}", status_line);
                     }

@@ -1,16 +1,15 @@
 //! Debug test to isolate yamux stream handling issues
 
 use std::time::Duration;
-use tokio::time::timeout;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 
-use gsc_fq::reverse_proxy::{
-    server::ReverseProxyServer,
-    client::ReverseProxyClient,
+use gsc_fq::config::loader::{
+    ReverseProxyClientSection, ReverseProxySection, ReverseProxyServerSection,
 };
-use gsc_fq::config::loader::{ReverseProxySection, ReverseProxyServerSection, ReverseProxyClientSection};
 use gsc_fq::config::ConfigFile;
+use gsc_fq::reverse_proxy::{client::ReverseProxyClient, server::ReverseProxyServer};
 
 mod support;
 use support::PingPongServer;
@@ -55,7 +54,7 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configure reverse proxy
     let reverse_proxy_config = vec![ReverseProxySection {
-        server: external_port.to_string(),  // External port only
+        server: external_port.to_string(), // External port only
         local: format!("127.0.0.1:{}", pingpong_addr.port()),
         source_ip: None,
     }];
@@ -66,26 +65,39 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
             bind_ip: Some("127.0.0.1".to_string()),
             debug: Some(true),
         }),
+        token: Some("default".to_string()),
+        totp_secret: None,
         proxies: vec![],
         reverse_proxies: reverse_proxy_config, // ✅ 正确传递配置
         reverse_proxy_server: Some(ReverseProxyServerSection {
             port: control_port,
             allowed_tokens: vec![], // No tokens for testing
+            totp_secret: None,
         }),
         reverse_proxy_client: Some(ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", control_port),
+            token: None,
+            totp_secret: None,
         }),
     };
     let mut server = ReverseProxyServer::new("127.0.0.1".parse()?, control_port);
-    let server_handle = server.start();
+    let server_handle = tokio::spawn(async move {
+        if let Err(e) = server.start().await {
+            eprintln!("❌ Server loop exited with error: {}", e);
+        }
+    });
 
-    println!("   ✅ Reverse proxy server started on control port {}", control_port);
+    println!(
+        "   ✅ Reverse proxy server started on control port {}",
+        control_port
+    );
 
     // Give server time to start
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Start reverse proxy client
-    let mut client = ReverseProxyClient::new(format!("127.0.0.1:{}", control_port).parse()?, config);
+    let mut client =
+        ReverseProxyClient::new(format!("127.0.0.1:{}", control_port).parse()?, config);
     let client_handle = tokio::spawn(async move {
         if let Err(e) = client.start().await {
             eprintln!("❌ Client error: {}", e);
@@ -99,21 +111,40 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Check if the external port is actually listening
-    println!("   🔍 Checking if proxy port {} is listening...", external_port);
-    match timeout(Duration::from_secs(3), TcpStream::connect(format!("127.0.0.1:{}", external_port))).await {
+    println!(
+        "   🔍 Checking if proxy port {} is listening...",
+        external_port
+    );
+    match timeout(
+        Duration::from_secs(3),
+        TcpStream::connect(format!("127.0.0.1:{}", external_port)),
+    )
+    .await
+    {
         Ok(Ok(_stream)) => {
             println!("   ✅ Proxy port {} is listening!", external_port);
 
             // Test direct connection to proxy port
-            println!("   🔍 Testing connection to proxy port {}...", external_port);
+            println!(
+                "   🔍 Testing connection to proxy port {}...",
+                external_port
+            );
             drop(_stream); // Drop the first connection, create a new one for test
 
-            match timeout(Duration::from_secs(5), TcpStream::connect(format!("127.0.0.1:{}", external_port))).await {
+            match timeout(
+                Duration::from_secs(5),
+                TcpStream::connect(format!("127.0.0.1:{}", external_port)),
+            )
+            .await
+            {
                 Ok(Ok(mut stream)) => {
                     println!("   ✅ Connected to proxy port {}", external_port);
 
                     // Send HTTP request
-                    let request = format!("GET /ping HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n", external_port);
+                    let request = format!(
+                        "GET /ping HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+                        external_port
+                    );
                     stream.write_all(request.as_bytes()).await?;
                     stream.flush().await?;
                     println!("   ✅ Sent HTTP request: {}", request.trim());
@@ -127,10 +158,10 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
                             response.push_str(&String::from_utf8_lossy(&buffer[..n]));
                             println!("   📥 Received response: {}", response.trim());
 
-                            if response.contains("Pong") {
+                            if response.contains("PONG") {
                                 println!("   🎉 SUCCESS: Received PingPong response!");
                             } else {
-                                println!("   ❌ FAILURE: Response doesn't contain expected 'Pong'");
+                                println!("   ❌ FAILURE: Response doesn't contain expected 'PONG'");
                                 return Err("Invalid response from PingPong server".into());
                             }
                         }
@@ -145,7 +176,10 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Ok(Err(e)) => {
-                    println!("   ❌ Failed to connect to proxy port {}: {}", external_port, e);
+                    println!(
+                        "   ❌ Failed to connect to proxy port {}: {}",
+                        external_port, e
+                    );
                     return Err(e.into());
                 }
                 Err(_) => {
@@ -155,7 +189,10 @@ async fn debug_yamux_stream_issue() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Ok(Err(e)) => {
-            println!("   ❌ Failed to connect to proxy port {}: {}", external_port, e);
+            println!(
+                "   ❌ Failed to connect to proxy port {}: {}",
+                external_port, e
+            );
             return Err(e.into());
         }
         Err(_) => {

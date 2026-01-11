@@ -3,7 +3,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use gsc_fq::config::loader::{ConfigFile, ReverseProxySection, ServerSection, ReverseProxyClientSection};
+use gsc_fq::config::loader::{
+    ConfigFile, ProxySection, ReverseProxyClientSection, ReverseProxySection, ServerSection,
+};
 use gsc_fq::proxy::ProxyInstance;
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -47,9 +49,18 @@ impl ProxyHandle {
     pub async fn start(local_port: u16, target: RemoteTarget) -> Result<Self> {
         let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let remote_addr = target.resolve().await?;
+        let source_ip = None;
 
-        let instance = ProxyInstance::new(bind_ip, local_port, remote_addr, None)
-            .context("failed to create proxy instance")?;
+        let instance = gsc_fq::proxy::ProxyInstance::new(
+            bind_ip,
+            local_port,
+            remote_addr,
+            source_ip,
+            None,
+            None,
+            None,
+        )
+        .context("failed to create proxy instance")?;
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
 
         let join_handle = tokio::spawn(async move {
@@ -183,8 +194,8 @@ pub async fn wait_for_port_ready(port: u16, timeout: Duration) -> io::Result<()>
 pub fn pick_available_port() -> Result<u16> {
     // Try multiple times to get a truly available port
     for _ in 0..3 {
-        let listener =
-            std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("failed to allocate port")?;
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .context("failed to allocate port")?;
         let port = listener
             .local_addr()
             .context("failed to read allocated port")?
@@ -225,7 +236,7 @@ impl PingPongServer {
     pub async fn start() -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let addr = listener.local_addr()?;
-        
+
         let handle = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -249,7 +260,7 @@ impl PingPongServer {
         let (reader, mut writer) = socket.split();
         let mut reader = BufReader::new(reader);
         let mut request_line = String::new();
-        
+
         if reader.read_line(&mut request_line).await.is_err() {
             return;
         }
@@ -311,7 +322,7 @@ pub struct ReverseProxyServerHandle {
 impl ReverseProxyServerHandle {
     pub async fn start(control_port: u16) -> Result<Self> {
         let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        
+
         let handle = tokio::spawn(async move {
             let mut server = ReverseProxyServer::new(bind_ip, control_port);
             let _ = server.start().await;
@@ -362,11 +373,25 @@ impl ReverseProxyClientHandle {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(false),
             }),
-            proxies: Vec::new(),
-            reverse_proxies,
+            proxies: reverse_proxies
+                .iter()
+                .map(|rp| ProxySection {
+                    local: rp.server.clone(),
+                    remote: rp.local.clone(),
+                    source_ip: rp.source_ip.clone(),
+                    allow_ips: None,
+                    max_conns_per_ip: None,
+                    cps_limit: None,
+                })
+                .collect(),
+            token: Some("default".to_string()),
+            totp_secret: None,
+            reverse_proxies: Vec::new(), // ReverseProxyClient uses `proxies` field for its tunnels
             reverse_proxy_server: None,
             reverse_proxy_client: Some(ReverseProxyClientSection {
                 server: server_addr.to_string(),
+                token: None,
+                totp_secret: None,
             }),
         };
 

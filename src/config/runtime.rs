@@ -1,17 +1,17 @@
-use std::net::SocketAddr;
-use crate::config::{ConfigLoader, ConfigFile};
+use crate::config::{ConfigFile, ConfigLoader};
 use crate::error::{AppError, Result};
 use crate::proxy::ProxyServerBuilder;
-use crate::reverse_proxy::{ReverseProxyServer, ReverseProxyClient};
-use std::path::PathBuf;
+use crate::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 
 /// Runtime mode enum
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunMode {
-    Forward,           // Forward proxy mode (default)
-    ReverseServer,     // Reverse proxy server mode
-    ReverseClient,     // Reverse proxy client mode
+    Forward,       // Forward proxy mode (default)
+    ReverseServer, // Reverse proxy server mode
+    ReverseClient, // Reverse proxy client mode
 }
 
 impl RunMode {
@@ -22,7 +22,10 @@ impl RunMode {
             "reverse_server" | "server" | "reverse-server" => RunMode::ReverseServer,
             "reverse_client" | "client" | "reverse-client" => RunMode::ReverseClient,
             _ => {
-                eprintln!("⚠️  Unknown runtime mode '{}', using 'forward' as fallback", mode);
+                eprintln!(
+                    "⚠️  Unknown runtime mode '{}', using 'forward' as fallback",
+                    mode
+                );
                 RunMode::Forward
             }
         }
@@ -52,7 +55,11 @@ impl RuntimeManager {
         let mode_str = config.get_runtime_mode();
         let mode = RunMode::from_str(&mode_str);
 
-        eprintln!("🚀 Runtime mode: {} (config: {})", mode.as_str(), config_path.display());
+        eprintln!(
+            "🚀 Runtime mode: {} (config: {})",
+            mode.as_str(),
+            config_path.display()
+        );
 
         Ok(Self {
             config,
@@ -65,7 +72,11 @@ impl RuntimeManager {
     pub fn new_with_mode(mode: RunMode) -> Result<Self> {
         let (config, config_path) = ConfigLoader::load_with_search()?;
 
-        eprintln!("🚀 Runtime mode: {} (overridden, config: {})", mode.as_str(), config_path.display());
+        eprintln!(
+            "🚀 Runtime mode: {} (overridden, config: {})",
+            mode.as_str(),
+            config_path.display()
+        );
 
         Ok(Self {
             config,
@@ -92,7 +103,10 @@ impl RuntimeManager {
     /// Run the appropriate mode
     pub async fn run(&self) -> Result<()> {
         // Initialize debug system from config
-        let debug_enabled = self.config.server.as_ref()
+        let debug_enabled = self
+            .config
+            .server
+            .as_ref()
             .and_then(|s| s.debug)
             .unwrap_or(false);
         crate::utils::debug::init_debug(debug_enabled);
@@ -114,7 +128,7 @@ impl RuntimeManager {
                 crate::error::ConfigError::InvalidConfigValue {
                     path: "proxies".to_string(),
                     reason: "No proxy configurations found".to_string(),
-                }
+                },
             ));
         }
 
@@ -143,13 +157,16 @@ impl RuntimeManager {
         eprintln!("🏠 Starting reverse proxy server mode...");
 
         let control_port = if let Some(server) = &self.config.reverse_proxy_server {
-            server.port  // 符合SPEC：从reverse_proxy_server获取端口
+            server.port // 符合SPEC：从reverse_proxy_server获取端口
         } else {
-            9001  // 符合SPEC：默认控制端口（ARCH-REVERSE-004）
+            9001 // 符合SPEC：默认控制端口（ARCH-REVERSE-004）
         };
 
         // Get bind IP
-        let bind_ip: IpAddr = self.config.server.as_ref()
+        let bind_ip: IpAddr = self
+            .config
+            .server
+            .as_ref()
             .and_then(|s| s.bind_ip.as_ref())
             .and_then(|ip| ip.parse().ok())
             .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
@@ -165,20 +182,16 @@ impl RuntimeManager {
         eprintln!("🌐 Starting reverse proxy client mode...");
 
         let server_address = if let Some(client) = &self.config.reverse_proxy_client {
-            client.server.clone()  // 符合SPEC：从reverse_proxy_client获取地址
+            client.server.clone() // 符合SPEC：从reverse_proxy_client获取地址
         } else {
             eprintln!("❌ No reverse_proxy_client configuration found!");
             return Err(AppError::Config(
-                crate::error::ConfigError::MissingRequiredField(
-                    "reverse_proxy_client".to_string()
-                )
+                crate::error::ConfigError::MissingRequiredField("reverse_proxy_client".to_string()),
             ));
         };
 
-        let server_addr: SocketAddr = server_address.parse().map_err(|_| {
-            AppError::Internal {
-                message: format!("Invalid server address: {}", server_address)
-            }
+        let server_addr: SocketAddr = server_address.parse().map_err(|_| AppError::Internal {
+            message: format!("Invalid server address: {}", server_address),
         })?;
 
         if self.config.reverse_proxies.is_empty() {
@@ -187,12 +200,15 @@ impl RuntimeManager {
                 crate::error::ConfigError::InvalidConfigValue {
                     path: "reverse_proxies".to_string(),
                     reason: "No reverse proxy configurations found".to_string(),
-                }
+                },
             ));
         }
 
         eprintln!("🔗 Connecting to server: {}", server_addr);
-        eprintln!("📋 Reverse proxy rules: {}", self.config.reverse_proxies.len());
+        eprintln!(
+            "📋 Reverse proxy rules: {}",
+            self.config.reverse_proxies.len()
+        );
 
         let mut client = ReverseProxyClient::new(server_addr, self.config.clone());
         client.start().await

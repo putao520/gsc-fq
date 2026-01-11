@@ -11,6 +11,8 @@ pub struct ConfigFile {
     pub server: Option<ServerSection>,
     #[serde(default)]
     pub proxies: Vec<ProxySection>,
+    pub token: Option<String>,
+    pub totp_secret: Option<String>,
     #[serde(default)]
     pub reverse_proxies: Vec<ReverseProxySection>,
 
@@ -36,9 +38,9 @@ impl ServerSection {
 /// Authentication mode for server
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMode {
-    None,       // No authentication required
-    Single,     // Single token validation
-    Multiple,   // Multiple allowed tokens
+    None,     // No authentication required
+    Single,   // Single token validation
+    Multiple, // Multiple allowed tokens
 }
 
 impl Default for ServerSection {
@@ -53,9 +55,12 @@ impl Default for ServerSection {
 /// Proxy configuration section
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProxySection {
-    pub local: String,           // "8080" or "127.0.0.1:8080"
-    pub remote: String,          // "80" or "example.com:80" or "192.168.1.100:80"
+    pub local: String,  // "8080" or "127.0.0.1:8080"
+    pub remote: String, // "80" or "example.com:80" or "192.168.1.100:80"
     pub source_ip: Option<String>,
+    pub allow_ips: Option<Vec<String>>,
+    pub max_conns_per_ip: Option<usize>,
+    pub cps_limit: Option<f64>, // connections per second
 }
 
 impl ProxySection {
@@ -67,19 +72,26 @@ impl ProxySection {
             if parts.len() != 2 {
                 return Err(AppError::Config(ConfigError::InvalidConfigValue {
                     path: "local".to_string(),
-                    reason: format!("Invalid local format '{}', expected 'IP:PORT' or 'PORT'", self.local),
+                    reason: format!(
+                        "Invalid local format '{}', expected 'IP:PORT' or 'PORT'",
+                        self.local
+                    ),
                 }));
             }
-            parts[1].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "local".to_string(),
-                reason: format!("Invalid port number in '{}'", self.local),
-            }))
+            parts[1].parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "local".to_string(),
+                    reason: format!("Invalid port number in '{}'", self.local),
+                })
+            })
         } else {
             // Format: "PORT"
-            self.local.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "local".to_string(),
-                reason: format!("Invalid port number '{}'", self.local),
-            }))
+            self.local.parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "local".to_string(),
+                    reason: format!("Invalid port number '{}'", self.local),
+                })
+            })
         }
     }
 
@@ -105,10 +117,13 @@ impl ProxySection {
             if parts.len() < 2 {
                 return Err(AppError::Config(ConfigError::InvalidConfigValue {
                     path: "remote".to_string(),
-                    reason: format!("Invalid remote format '{}', expected 'HOST:PORT' or 'PORT'", self.remote),
+                    reason: format!(
+                        "Invalid remote format '{}', expected 'HOST:PORT' or 'PORT'",
+                        self.remote
+                    ),
                 }));
             }
-            Ok(parts[0..parts.len()-1].join(":")) // Handle IPv6 addresses
+            Ok(parts[0..parts.len() - 1].join(":")) // Handle IPv6 addresses
         } else {
             // Format: "PORT" - assume localhost
             Ok("localhost".to_string())
@@ -126,16 +141,20 @@ impl ProxySection {
                     reason: format!("Invalid remote format '{}'", self.remote),
                 }));
             }
-            parts[0].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "remote".to_string(),
-                reason: format!("Invalid port number in '{}'", self.remote),
-            }))
+            parts[0].parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "remote".to_string(),
+                    reason: format!("Invalid port number in '{}'", self.remote),
+                })
+            })
         } else {
             // Format: "PORT"
-            self.remote.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "remote".to_string(),
-                reason: format!("Invalid port number '{}'", self.remote),
-            }))
+            self.remote.parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "remote".to_string(),
+                    reason: format!("Invalid port number '{}'", self.remote),
+                })
+            })
         }
     }
 }
@@ -162,16 +181,20 @@ impl ReverseProxySection {
                     reason: format!("Invalid server format '{}'", self.server),
                 }));
             }
-            parts[0].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "server".to_string(),
-                reason: format!("Invalid port number in '{}'", self.server),
-            }))
+            parts[0].parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "server".to_string(),
+                    reason: format!("Invalid port number in '{}'", self.server),
+                })
+            })
         } else {
             // Format: "PORT"
-            self.server.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "server".to_string(),
-                reason: format!("Invalid port number '{}'", self.server),
-            }))
+            self.server.parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "server".to_string(),
+                    reason: format!("Invalid port number '{}'", self.server),
+                })
+            })
         }
     }
 
@@ -180,7 +203,7 @@ impl ReverseProxySection {
         if self.server.contains(':') {
             let parts: Vec<&str> = self.server.split(':').collect();
             if parts.len() >= 2 {
-                Some(parts[0..parts.len()-1].join(":")) // Handle IPv6
+                Some(parts[0..parts.len() - 1].join(":")) // Handle IPv6
             } else {
                 None
             }
@@ -200,16 +223,20 @@ impl ReverseProxySection {
                     reason: format!("Invalid local format '{}'", self.local),
                 }));
             }
-            parts[0].parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "local".to_string(),
-                reason: format!("Invalid port number in '{}'", self.local),
-            }))
+            parts[0].parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "local".to_string(),
+                    reason: format!("Invalid port number in '{}'", self.local),
+                })
+            })
         } else {
             // Format: "PORT"
-            self.local.parse().map_err(|_| AppError::Config(ConfigError::InvalidConfigValue {
-                path: "local".to_string(),
-                reason: format!("Invalid port number '{}'", self.local),
-            }))
+            self.local.parse().map_err(|_| {
+                AppError::Config(ConfigError::InvalidConfigValue {
+                    path: "local".to_string(),
+                    reason: format!("Invalid port number '{}'", self.local),
+                })
+            })
         }
     }
 
@@ -218,7 +245,7 @@ impl ReverseProxySection {
         if self.local.contains(':') {
             let parts: Vec<&str> = self.local.split(':').collect();
             if parts.len() >= 2 {
-                Some(parts[0..parts.len()-1].join(":")) // Handle IPv6
+                Some(parts[0..parts.len() - 1].join(":")) // Handle IPv6
             } else {
                 Some("localhost".to_string())
             }
@@ -234,7 +261,8 @@ pub struct ReverseProxyServerSection {
     /// Port for the reverse proxy server to listen on
     pub port: u16,
     #[serde(default)]
-    pub allowed_tokens: Vec<String>,        // Authentication tokens for reverse proxy clients
+    pub allowed_tokens: Vec<String>, // Authentication tokens for reverse proxy clients
+    pub totp_secret: Option<String>, // Base32 or Hex secret for TOTP
 }
 
 impl Default for ReverseProxyServerSection {
@@ -242,6 +270,7 @@ impl Default for ReverseProxyServerSection {
         Self {
             port: 9001,
             allowed_tokens: Vec::new(),
+            totp_secret: None,
         }
     }
 }
@@ -251,20 +280,28 @@ impl Default for ReverseProxyServerSection {
 pub struct ReverseProxyClientSection {
     /// Server address to connect to (e.g., "server.example.com:9001")
     pub server: String,
+    pub token: Option<String>,
+    pub totp_secret: Option<String>,
 }
 
 impl ConfigFile {
+    /// Determine runtime mode from configuration
+    pub fn get_runtime_mode(&self) -> String {
+        if self.reverse_proxy_client.is_some() {
+            "reverse_client".to_string()
+        } else if self.reverse_proxy_server.is_some() {
+            "reverse_server".to_string()
+        } else {
+            "forward".to_string()
+        }
+    }
+
     /// Validate configuration integrity and return non-fatal warnings
     pub fn validate(&mut self) -> std::result::Result<Vec<String>, ConfigError> {
         use std::collections::HashSet;
 
         let mut warnings = Vec::new();
         let mut errors = Vec::new();
-
-        // 配置文件必须有代理规则（正向或反向）
-        if self.proxies.is_empty() && self.reverse_proxies.is_empty() {
-            errors.push("No proxy configurations found (neither proxies nor reverse_proxies)".to_string());
-        }
 
         // 验证反向代理配置的一致性
         if !self.reverse_proxies.is_empty() {
@@ -332,7 +369,10 @@ impl ConfigFile {
             };
 
             if remote_port == 0 {
-                errors.push(format!("{}.remote port must be between 1 and 65535", prefix));
+                errors.push(format!(
+                    "{}.remote port must be between 1 and 65535",
+                    prefix
+                ));
             }
 
             // Check for duplicate local ports
@@ -381,7 +421,10 @@ impl ConfigFile {
             };
 
             if server_port == 0 {
-                errors.push(format!("{}.server port must be between 1 and 65535", prefix));
+                errors.push(format!(
+                    "{}.server port must be between 1 and 65535",
+                    prefix
+                ));
             }
 
             // Check for duplicate server ports
@@ -600,6 +643,69 @@ impl ConfigLoader {
 
         (line, column)
     }
+
+    /// Load configuration by searching CLI arguments or common paths
+    pub fn load_with_search() -> Result<(ConfigFile, std::path::PathBuf)> {
+        // 1. Check CLI args first
+        if let Some(path) = Self::get_cli_config_path() {
+            if path.exists() {
+                match Self::load_from_file(&path) {
+                    Ok(config) => return Ok((config, path)),
+                    Err(e) => {
+                        eprintln!(
+                            "❌ Failed to load config specified by CLI '{:?}': {}",
+                            path, e
+                        );
+                        // If user explicitly provided a path and it fails, we should probably fail hard?
+                        // But existing logic might prefer fallback. For now, let's return error to be explicit.
+                        return Err(e);
+                    }
+                }
+            } else {
+                return Err(AppError::Config(ConfigError::ConfigFileNotFound(format!(
+                    "CLI specified config file not found: {:?}",
+                    path
+                ))));
+            }
+        }
+
+        // 2. Fallback to default search paths
+        let paths = Self::get_config_search_paths();
+
+        for path in &paths {
+            if path.exists() {
+                match Self::load_from_file(path) {
+                    Ok(config) => return Ok((config, path.clone())),
+                    Err(e) => eprintln!("⚠️  Failed to load config from {}: {}", path.display(), e),
+                }
+            }
+        }
+
+        Err(AppError::Config(ConfigError::ConfigFileNotFound(format!(
+            "No configuration file found. Searched: {:?}",
+            paths
+        ))))
+    }
+
+    /// Check for `-c` or `--config` argument
+    fn get_cli_config_path() -> Option<std::path::PathBuf> {
+        let args: Vec<String> = std::env::args().collect();
+        for i in 1..args.len() {
+            if (args[i] == "-c" || args[i] == "--config") && i + 1 < args.len() {
+                return Some(std::path::PathBuf::from(&args[i + 1]));
+            }
+        }
+        None
+    }
+
+    /// Get list of configuration search paths (defaults)
+    pub fn get_config_search_paths() -> Vec<std::path::PathBuf> {
+        let mut paths = Vec::new();
+        paths.push(std::path::PathBuf::from("default.toml"));
+        paths.push(std::path::PathBuf::from("config.toml"));
+        paths.push(std::path::PathBuf::from("gsc-fq.toml"));
+        paths
+    }
 }
 
 #[cfg(test)]
@@ -617,7 +723,12 @@ mod tests {
                 local: "8080".to_string(),
                 remote: "example.com:80".to_string(),
                 source_ip: Some("invalid-ip".to_string()),
+                allow_ips: None,
+                max_conns_per_ip: None,
+                cps_limit: None,
             }],
+            token: Some("default".to_string()),
+            totp_secret: None,
             reverse_proxies: vec![],
             reverse_proxy_server: None,
             reverse_proxy_client: None,
@@ -694,13 +805,21 @@ local = "7000"
                     local: "8080".to_string(),
                     remote: "example.com:80".to_string(),
                     source_ip: None,
+                    allow_ips: None,
+                    max_conns_per_ip: None,
+                    cps_limit: None,
                 },
                 ProxySection {
                     local: "8080".to_string(),
                     remote: "example.net:8080".to_string(),
                     source_ip: None,
+                    allow_ips: None,
+                    max_conns_per_ip: None,
+                    cps_limit: None,
                 },
             ],
+            token: Some("default".to_string()),
+            totp_secret: None,
             reverse_proxies: vec![],
             reverse_proxy_server: None,
             reverse_proxy_client: None,

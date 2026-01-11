@@ -3,12 +3,14 @@ use crate::error::types::ProxyError;
 use crate::error::Result;
 use crate::proxy::stealth_handler::StealthHandler;
 use crate::proxy::ConnectionPool;
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 /// Stealth connection handler with blackhole mode
 /// Replaces EnhancedConnectionHandler to enable blackhole functionality
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::Mutex;
 
 /// Stealth connection handler that includes blackhole mode
 #[derive(Clone)]
@@ -19,6 +21,27 @@ pub struct StealthConnectionHandler {
     source_ip: Option<std::net::IpAddr>,
     stats: Arc<StealthConnectionCounters>,
     connection_pool: Option<Arc<ConnectionPool>>,
+    udp_sessions: Arc<Mutex<HashMap<SocketAddr, Arc<UdpSocket>>>>,
+    allow_ips: Option<Vec<String>>,
+    max_conns_per_ip: Option<usize>,
+    cps_limit: Option<f64>,
+    // Per-IP rate limiting and connection tracking
+    ip_stats: Arc<Mutex<HashMap<IpAddr, IpSecurityStats>>>,
+}
+
+struct IpSecurityStats {
+    active_connections: usize,
+    // For simple CPS limiting
+    recent_connections: Vec<std::time::Instant>,
+}
+
+impl IpSecurityStats {
+    fn new() -> Self {
+        Self {
+            active_connections: 0,
+            recent_connections: Vec::new(),
+        }
+    }
 }
 
 impl StealthConnectionHandler {
@@ -27,17 +50,32 @@ impl StealthConnectionHandler {
         remote_addr: SocketAddr,
         source_ip: Option<std::net::IpAddr>,
         connection_pool: Option<Arc<ConnectionPool>>,
+        allow_ips: Option<Vec<String>>,
+        max_conns_per_ip: Option<usize>,
+        cps_limit: Option<f64>,
     ) -> Self {
         Self {
             remote_addr,
             source_ip,
             stats: Arc::new(StealthConnectionCounters::new()),
             connection_pool,
+            udp_sessions: Arc::new(Mutex::new(HashMap::new())),
+            allow_ips,
+            max_conns_per_ip,
+            cps_limit,
+            ip_stats: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Handle incoming connection with stealth capabilities
     pub async fn handle_connection(&self, client: TcpStream) -> Result<()> {
+        let client_addr = client.peer_addr().ok();
+
+        // 1. ACL and Rate Limiting Check
+        if let Some(addr) = client_addr {
+            self.check_security(addr.ip()).await?;
+        }
+
         // Update connection statistics
         self.stats.total_connections.fetch_add(1, Ordering::Relaxed);
         self.stats
@@ -64,6 +102,9 @@ impl StealthConnectionHandler {
             }
             Err(e) => {
                 debug_println!("Stealth handler failed for {:?}: {:?}", client_addr, e);
+                if let Some(addr) = client_addr {
+                    self.register_disconnection(addr.ip()).await;
+                }
                 self.stats
                     .failed_connections
                     .fetch_add(1, Ordering::Relaxed);
@@ -72,6 +113,9 @@ impl StealthConnectionHandler {
         }
 
         // Decrement active connections
+        if let Some(addr) = client_addr {
+            self.register_disconnection(addr.ip()).await;
+        }
         self.stats
             .active_connections
             .fetch_sub(1, Ordering::Relaxed);
@@ -113,7 +157,162 @@ impl StealthConnectionHandler {
     pub async fn get_connection_stats(&self) -> StealthConnectionStats {
         self.stats.snapshot()
     }
+
+    /// Check security rules (ACL and Rate Limiting)
+    async fn check_security(&self, ip: IpAddr) -> Result<()> {
+        // 1. Check ACL
+        if let Some(ref allowed) = self.allow_ips {
+            let ip_str = ip.to_string();
+            let mut match_found = false;
+            for pattern in allowed {
+                // Simple string match or CIDR?
+                // For now, simple string match or prefix (simplified)
+                if ip_str == *pattern || pattern == "0.0.0.0/0" || pattern == "::/0" {
+                    match_found = true;
+                    break;
+                }
+            }
+            if !match_found {
+                return Err(
+                    ProxyError::ForwardingFailed(format!("IP {} not in allow list", ip)).into(),
+                );
+            }
+        }
+
+        // 2. Check Rate Limiting and Max Connections
+        if self.max_conns_per_ip.is_some() || self.cps_limit.is_some() {
+            let mut ip_stats_map = self.ip_stats.lock().await;
+            let stats = ip_stats_map.entry(ip).or_insert_with(IpSecurityStats::new);
+
+            // Max connections check
+            if let Some(max_active) = self.max_conns_per_ip {
+                if stats.active_connections >= max_active {
+                    return Err(ProxyError::ForwardingFailed(format!(
+                        "Max connections per IP reached for {}",
+                        ip
+                    ))
+                    .into());
+                }
+            }
+
+            // CPS check
+            if let Some(limit) = self.cps_limit {
+                let now = std::time::Instant::now();
+                // Clean up old entries (older than 1s)
+                stats
+                    .recent_connections
+                    .retain(|&t| now.duration_since(t) < std::time::Duration::from_secs(1));
+
+                if stats.recent_connections.len() >= limit as usize {
+                    return Err(ProxyError::ForwardingFailed(format!(
+                        "Connection rate limit exceeded for {}",
+                        ip
+                    ))
+                    .into());
+                }
+                stats.recent_connections.push(now);
+            }
+
+            stats.active_connections += 1;
+        }
+
+        Ok(())
+    }
+
+    /// Register connection closure for rate limiting stats
+    async fn register_disconnection(&self, ip: IpAddr) {
+        if self.max_conns_per_ip.is_some() {
+            let mut ip_stats_map = self.ip_stats.lock().await;
+            if let Some(stats) = ip_stats_map.get_mut(&ip) {
+                stats.active_connections = stats.active_connections.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Handle UDP packet forwarding
+    pub async fn handle_udp_packet(
+        &self,
+        data: Vec<u8>,
+        client_addr: SocketAddr,
+        server_socket: Arc<UdpSocket>,
+    ) -> Result<()> {
+        // 1. ACL and Rate Limiting Check
+        self.check_security(client_addr.ip()).await?;
+
+        let mut sessions = self.udp_sessions.lock().await;
+
+        // Get or create session for this client
+        let backend_socket = if let Some(socket) = sessions.get(&client_addr) {
+            socket.clone()
+        } else {
+            // Bind a new local socket for this client to talk to the remote
+            let socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
+                ProxyError::ForwardingFailed(format!("Failed to bind backend UDP socket: {}", e))
+            })?);
+
+            // Connect to the target
+            socket.connect(self.remote_addr).await.map_err(|e| {
+                ProxyError::ForwardingFailed(format!(
+                    "Failed to connect to remote UDP {}: {}",
+                    self.remote_addr, e
+                ))
+            })?;
+
+            let socket_clone = socket.clone();
+            let sessions_clone = self.udp_sessions.clone();
+            let remote_addr = self.remote_addr;
+
+            // Spawn relay task for responses from remote to client
+            tokio::spawn(async move {
+                let mut buf = [0u8; 65535];
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(60), socket_clone.recv(&mut buf))
+                        .await
+                    {
+                        Ok(Ok(n)) => {
+                            if let Err(e) = server_socket.send_to(&buf[..n], client_addr).await {
+                                crate::error_println!(
+                                    "Failed to send UDP response back to {}: {}",
+                                    client_addr,
+                                    e
+                                );
+                                break;
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            crate::error_println!(
+                                "UDP backend recv error from {}: {}",
+                                remote_addr,
+                                e
+                            );
+                            break;
+                        }
+                        Err(_) => {
+                            debug_println!("UDP session for {} timed out", client_addr);
+                            break;
+                        }
+                    }
+                }
+
+                // Cleanup session
+                let mut sessions = sessions_clone.lock().await;
+                sessions.remove(&client_addr);
+            });
+
+            sessions.insert(client_addr, socket.clone());
+            socket
+        };
+
+        // Forward data to remote
+        backend_socket.send(&data).await.map_err(|e| {
+            ProxyError::ForwardingFailed(format!("Failed to forward UDP packet: {}", e))
+        })?;
+
+        Ok(())
+    }
 }
+
+use std::time::Duration;
 
 /// Connection statistics for stealth handler
 #[derive(Debug, Default)]
@@ -187,7 +386,7 @@ mod tests {
     #[test]
     fn test_stealth_handler_creation() {
         let remote_addr = "127.0.0.1:8080".parse().unwrap();
-        let handler = StealthConnectionHandler::new(remote_addr, None, None);
+        let handler = StealthConnectionHandler::new(remote_addr, None, None, None, None, None);
 
         assert_eq!(handler.remote_addr(), remote_addr);
         assert_eq!(handler.stats.total_connections(), 0);

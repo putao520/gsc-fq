@@ -2,12 +2,12 @@
 // 测试隧道代理的基本功能，使用本地服务避免DNS问题
 
 use anyhow::Result;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::time::{timeout, Duration};
 use gsc_fq::config::loader::ProxySection;
 use gsc_fq::proxy::ProxyServerBuilder;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{timeout, Duration};
 
 /// 启动本地echo服务器用于测试
 async fn start_echo_server(port: u16) -> Result<()> {
@@ -56,9 +56,15 @@ async fn test_tunnel_proxy_local_service() -> Result<()> {
         local: proxy_port.to_string(),
         remote: format!("127.0.0.1:{}", echo_port), // 使用IP避免DNS
         source_ip: None,
+        allow_ips: None,
+        max_conns_per_ip: None,
+        cps_limit: None,
     };
 
-    println!("🔧 代理配置: 本地端口 {} → 本地服务 {}", proxy_port, proxy_config.remote);
+    println!(
+        "🔧 代理配置: 本地端口 {} → 本地服务 {}",
+        proxy_port, proxy_config.remote
+    );
 
     // 启动代理服务器
     let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -82,8 +88,10 @@ async fn test_tunnel_proxy_local_service() -> Result<()> {
 
     match timeout(
         Duration::from_secs(5),
-        TcpStream::connect(format!("127.0.0.1:{}", proxy_port))
-    ).await {
+        TcpStream::connect(format!("127.0.0.1:{}", proxy_port)),
+    )
+    .await
+    {
         Ok(Ok(mut stream)) => {
             let connect_time = test_start.elapsed();
             println!("✅ 连接代理成功，耗时: {:?}", connect_time);
@@ -114,9 +122,10 @@ async fn test_tunnel_proxy_local_service() -> Result<()> {
                     }
 
                     let total_time = test_start.elapsed();
-                    println!("📊 性能统计: 总耗时={:?}, 连接={:?}, 写入={:?}, 读取={:?}",
-                        total_time, connect_time, write_time, read_time);
-
+                    println!(
+                        "📊 性能统计: 总耗时={:?}, 连接={:?}, 写入={:?}, 读取={:?}",
+                        total_time, connect_time, write_time, read_time
+                    );
                 }
                 Ok(Err(e)) => {
                     println!("❌ 读取响应时出错: {:?}", e);
@@ -160,9 +169,15 @@ async fn test_tunnel_proxy_ip_only() -> Result<()> {
         local: proxy_port.to_string(),
         remote: format!("{}:{}", public_ip, public_port),
         source_ip: None,
+        allow_ips: None,
+        max_conns_per_ip: None,
+        cps_limit: None,
     };
 
-    println!("🔧 代理配置: 本地端口 {} → 公共服务 {}:{}", proxy_port, public_ip, public_port);
+    println!(
+        "🔧 代理配置: 本地端口 {} → 公共服务 {}:{}",
+        proxy_port, public_ip, public_port
+    );
 
     // 启动代理服务器
     let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -184,10 +199,15 @@ async fn test_tunnel_proxy_ip_only() -> Result<()> {
 
     match timeout(
         Duration::from_secs(10),
-        TcpStream::connect(format!("127.0.0.1:{}", proxy_port))
-    ).await {
+        TcpStream::connect(format!("127.0.0.1:{}", proxy_port)),
+    )
+    .await
+    {
         Ok(Ok(mut stream)) => {
-            println!("✅ 通过代理成功连接到公共服务 {}:{}", public_ip, public_port);
+            println!(
+                "✅ 通过代理成功连接到公共服务 {}:{}",
+                public_ip, public_port
+            );
             println!("✅ 隧道代理TCP转发功能正常工作");
             let _ = stream.shutdown().await;
         }

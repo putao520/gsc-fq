@@ -295,6 +295,12 @@ impl ConnectionPool {
                     // 失效的连接自动丢弃
                 }
 
+                // 强制执行目标大小限制（清理多余连接）
+                let target_limit = pool_size.load(Ordering::Relaxed);
+                if valid_connections.len() > target_limit {
+                    valid_connections.truncate(target_limit);
+                }
+
                 let current_size = valid_connections.len();
                 *pool_guard = valid_connections;
                 drop(pool_guard); // 释放锁
@@ -359,28 +365,31 @@ impl ConnectionPool {
                 return;
             }
 
-            let current_size = pool.lock().await.len();
-            let target_size = pool_size.load(Ordering::Relaxed);
+            // 尝试获取信号量许可（限制并发创建连接数）
+            if let Ok(_permit) = semaphore.try_acquire() {
+                // 在持有许可的情况下检查池状态，减少竞争导致的超限创建
+                let current_size = pool.lock().await.len();
+                let target_size = pool_size.load(Ordering::Relaxed);
 
-            // 计算 miss 率，决定是否需要扩张
-            let hits = stats.pool_hits.load(Ordering::Relaxed);
-            let misses = stats.pool_misses.load(Ordering::Relaxed);
-            let total = hits + misses;
-            let miss_rate = if total > 0 {
-                misses as f64 / total as f64
-            } else {
-                0.0
-            };
+                // 计算 miss 率
+                let hits = stats.pool_hits.load(Ordering::Relaxed);
+                let misses = stats.pool_misses.load(Ordering::Relaxed);
+                let total = hits + misses;
+                let miss_rate = if total > 0 {
+                    misses as f64 / total as f64
+                } else {
+                    0.0
+                };
 
-            // 只补充一个连接
-            if current_size < target_size {
-                if let Ok(_permit) = semaphore.try_acquire() {
+                // 只在確實需要時補充
+                if current_size < target_size {
                     match Self::create_connection(remote_addr, source_ip).await {
                         Ok(stream) => {
                             pool.lock().await.push_back(stream);
                             stats.total_created.fetch_add(1, Ordering::Relaxed);
 
                             // 自适应扩张：根据 miss 率和池状态决定是否扩张
+                            // 使用刚获取的 sizes
                             if current_size + 1 >= target_size
                                 && target_size < MAX_POOL_SIZE
                                 && miss_rate > EXPANSION_MISS_THRESHOLD

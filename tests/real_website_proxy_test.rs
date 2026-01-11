@@ -1,13 +1,13 @@
 mod support;
 
 use anyhow::Result;
+use gsc_fq::config::loader::ConfigFile;
+use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
 use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 use support::wait_for_port_ready;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::timeout;
-use std::time::Duration;
-use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
-use gsc_fq::config::loader::ConfigFile;
 
 // 真实网站测试配置
 const PROXY_SERVER_PORT: u16 = 9001;
@@ -53,6 +53,9 @@ async fn test_tunnel_proxy_to_real_website() -> Result<()> {
             local: "127.0.0.1:8080".to_string(),
             remote: format!("{}:{}", website.ip, website.port),
             source_ip: None,
+            allow_ips: None,
+            max_conns_per_ip: None,
+            cps_limit: None,
         };
 
         let config = gsc_fq::config::loader::ConfigFile {
@@ -60,6 +63,8 @@ async fn test_tunnel_proxy_to_real_website() -> Result<()> {
                 bind_ip: Some("127.0.0.1".to_string()),
                 debug: Some(false),
             }),
+            token: Some("".to_string()),
+            totp_secret: None,
             proxies: vec![proxy_config],
             reverse_proxies: vec![],
             reverse_proxy_server: None,
@@ -87,8 +92,9 @@ async fn test_tunnel_proxy_to_real_website() -> Result<()> {
 
         let mut stream = timeout(
             Duration::from_secs(10),
-            tokio::net::TcpStream::connect("127.0.0.1:8080")
-        ).await??;
+            tokio::net::TcpStream::connect("127.0.0.1:8080"),
+        )
+        .await??;
 
         // 4. 发送HTTP请求
         let http_request = format!(
@@ -104,7 +110,12 @@ async fn test_tunnel_proxy_to_real_website() -> Result<()> {
         let mut reader = BufReader::new(stream);
         let mut response_line = String::new();
 
-        match timeout(Duration::from_secs(15), reader.read_line(&mut response_line)).await {
+        match timeout(
+            Duration::from_secs(15),
+            reader.read_line(&mut response_line),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 if response_line.starts_with("HTTP/1.1") {
                     println!("✅ 收到HTTP响应: {}", response_line.trim());
@@ -184,8 +195,12 @@ async fn test_reverse_tunnel_proxy_to_real_website() -> Result<()> {
             proxies: vec![],
             reverse_proxies: vec![proxy_config],
             reverse_proxy_server: None,
+            token: Some("".to_string()),
+            totp_secret: None,
             reverse_proxy_client: Some(gsc_fq::config::loader::ReverseProxyClientSection {
                 server: format!("127.0.0.1:{}", PROXY_SERVER_PORT),
+                token: None,
+                totp_secret: None,
             }),
         };
 
@@ -214,12 +229,16 @@ async fn test_reverse_tunnel_proxy_to_real_website() -> Result<()> {
         println!("✅ 反向代理已就绪，端口: {}", PROXY_CLIENT_LISTEN_PORT);
 
         // 4. 通过反向代理访问真实网站
-        println!("🌐 通过反向代理访问 http://{}{}", website.host, website.path);
+        println!(
+            "🌐 通过反向代理访问 http://{}{}",
+            website.host, website.path
+        );
 
         let mut stream = timeout(
             Duration::from_secs(10),
-            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
-        ).await??;
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
+        )
+        .await??;
 
         // 5. 发送端口头部 (反向代理协议要求)
         let port_bytes = (PROXY_CLIENT_LISTEN_PORT as u16).to_be_bytes();
@@ -240,7 +259,12 @@ async fn test_reverse_tunnel_proxy_to_real_website() -> Result<()> {
         let mut reader = BufReader::new(stream);
         let mut response_line = String::new();
 
-        match timeout(Duration::from_secs(15), reader.read_line(&mut response_line)).await {
+        match timeout(
+            Duration::from_secs(15),
+            reader.read_line(&mut response_line),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 if response_line.starts_with("HTTP/1.1") {
                     println!("✅ 收到HTTP响应: {}", response_line.trim());

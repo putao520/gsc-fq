@@ -1,16 +1,16 @@
 mod support;
 
 use anyhow::Result;
-use std::net::{IpAddr, Ipv4Addr};
-use support::wait_for_port_ready;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::time::timeout;
-use std::time::Duration;
 use gsc_fq::reverse_proxy::{ReverseProxyClient, ReverseProxyServer};
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
+use support::wait_for_port_ready;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 // 固定端口配置 - 确保测试可重复性
-const PROXY_SERVER_PORT: u16 = 9001;      // 反向代理服务端控制端口
+const PROXY_SERVER_PORT: u16 = 9001; // 反向代理服务端控制端口
 const PROXY_CLIENT_LISTEN_PORT: u16 = 9000; // 反向代理客户端监听端口
 
 /// 简单直接的反向代理集成测试
@@ -26,8 +26,10 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
     std::env::set_var("BLACKHOLE_FAILURE_THRESHOLD", "20");
 
     println!("🧪 开始反向代理集成测试（真实互联网服务）");
-    println!("📋 端口配置：服务端隧道端口={}, 服务端反代端口={}",
-        PROXY_SERVER_PORT, PROXY_CLIENT_LISTEN_PORT);
+    println!(
+        "📋 端口配置：服务端隧道端口={}, 服务端反代端口={}",
+        PROXY_SERVER_PORT, PROXY_CLIENT_LISTEN_PORT
+    );
 
     // 1. 配置反向代理客户端，指向真实互联网服务
     println!("🔧 配置反向代理，目标：httpbin.org (真实互联网服务)");
@@ -37,17 +39,23 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
         source_ip: None,
     };
 
-    println!("📋 代理配置: 服务端反代端口 {} → 真实目标服务 {}",
-        proxy_config.server, proxy_config.local);
+    println!(
+        "📋 代理配置: 服务端反代端口 {} → 真实目标服务 {}",
+        proxy_config.server, proxy_config.local
+    );
 
     // 创建配置文件
     let config = gsc_fq::config::loader::ConfigFile {
         server: None,
         proxies: vec![],
+        token: Some("default".to_string()),
+        totp_secret: None,
         reverse_proxies: vec![proxy_config],
         reverse_proxy_server: None,
         reverse_proxy_client: Some(gsc_fq::config::loader::ReverseProxyClientSection {
             server: format!("127.0.0.1:{}", PROXY_SERVER_PORT),
+            token: None,
+            totp_secret: None,
         }),
     };
 
@@ -57,7 +65,10 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
 
     let mut server = ReverseProxyServer::new(bind_ip, PROXY_SERVER_PORT);
     let server_handle = tokio::spawn(async move {
-        server.start().await.expect("Failed to start reverse proxy server");
+        server
+            .start()
+            .await
+            .expect("Failed to start reverse proxy server");
     });
 
     // 等待服务端启动
@@ -65,7 +76,10 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
     println!("✅ 反向代理服务端已启动");
 
     // 3. 启动反向代理客户端（连接服务端隧道端口）
-    println!("🔗 启动反向代理客户端，连接到服务端隧道端口: {}", PROXY_SERVER_PORT);
+    println!(
+        "🔗 启动反向代理客户端，连接到服务端隧道端口: {}",
+        PROXY_SERVER_PORT
+    );
     let server_addr = std::net::SocketAddr::new(bind_ip, PROXY_SERVER_PORT);
 
     // 在异步任务中启动客户端，避免阻塞主线程
@@ -92,8 +106,9 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
     let test_start = std::time::Instant::now();
     let mut stream = timeout(
         Duration::from_secs(10),
-        TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
-    ).await??;
+        TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
+    )
+    .await??;
 
     let connect_time = test_start.elapsed();
     println!("✅ 成功连接到反向代理，耗时: {:?}", connect_time);
@@ -113,12 +128,21 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
     // 6. 读取来自httpbin.org的响应
     let mut reader = BufReader::new(stream);
     let mut response_line = String::new();
-    let read_time;  // 提前声明变量以便在后续使用
+    let read_time; // 提前声明变量以便在后续使用
 
-    match timeout(Duration::from_secs(15), reader.read_line(&mut response_line)).await {
+    match timeout(
+        Duration::from_secs(15),
+        reader.read_line(&mut response_line),
+    )
+    .await
+    {
         Ok(Ok(bytes_read)) => {
             read_time = std::time::Instant::now().elapsed();
-            println!("📥 响应行: {} (耗时: {:?})", response_line.trim(), read_time);
+            println!(
+                "📥 响应行: {} (耗时: {:?})",
+                response_line.trim(),
+                read_time
+            );
 
             if bytes_read > 0 && response_line.starts_with("HTTP/1.1") {
                 // 读取完整响应
@@ -142,7 +166,10 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
                 }
 
                 println!("📋 完整响应长度: {} 字符", full_response.len());
-                println!("📋 响应摘要: {}", &full_response[..full_response.len().min(100)]);
+                println!(
+                    "📋 响应摘要: {}",
+                    &full_response[..full_response.len().min(100)]
+                );
 
                 // 7. 验证真实httpbin.org响应内容
                 if full_response.contains("httpbin.org") && full_response.contains("\"url\"") {
@@ -166,7 +193,6 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
                 } else {
                     println!("✅ 性能可接受: 总响应时间 < 10秒");
                 }
-
             } else {
                 println!("⚠️  收到非HTTP响应，但连接已建立");
             }
@@ -191,8 +217,10 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
 
         match timeout(
             Duration::from_secs(5),
-            TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT))
-        ).await {
+            TcpStream::connect(format!("127.0.0.1:{}", PROXY_CLIENT_LISTEN_PORT)),
+        )
+        .await
+        {
             Ok(Ok(mut stream)) => {
                 let http_request = format!(
                     "GET /status/{} HTTP/1.1\r\nHost: httpbin.org\r\nConnection: close\r\n\r\n",
@@ -236,7 +264,10 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    println!("✅ 稳定性测试完成，{}/{} 连接成功", successful_connections, total_connections);
+    println!(
+        "✅ 稳定性测试完成，{}/{} 连接成功",
+        successful_connections, total_connections
+    );
 
     if successful_connections == total_connections {
         println!("🎯 所有连接测试成功，反向代理功能完全正常");
@@ -256,12 +287,20 @@ async fn test_reverse_proxy_integration_with_real_service() -> Result<()> {
 
     println!("✅ 反向代理集成测试完成！");
     println!("🌐 测试总结：成功通过反向代理访问真实互联网服务 httpbin.org");
-    println!("⏱️  性能统计: 连接耗时={:?}, 写入耗时={:?}, 读取耗时={:?}",
-        connect_time, write_time, read_time);
+    println!(
+        "⏱️  性能统计: 连接耗时={:?}, 写入耗时={:?}, 读取耗时={:?}",
+        connect_time, write_time, read_time
+    );
 
     println!("🎯 最终验证：");
-    println!("   - 服务端隧道端口: {} (客户端连接服务端)", PROXY_SERVER_PORT);
-    println!("   - 服务端反代端口: {} (外部用户访问)", PROXY_CLIENT_LISTEN_PORT);
+    println!(
+        "   - 服务端隧道端口: {} (客户端连接服务端)",
+        PROXY_SERVER_PORT
+    );
+    println!(
+        "   - 服务端反代端口: {} (外部用户访问)",
+        PROXY_CLIENT_LISTEN_PORT
+    );
     println!("   - 目标互联网服务: httpbin.org:80 (真实HTTP测试服务)");
     println!("   - ✅ 反向代理成功转发到真实互联网服务");
 
