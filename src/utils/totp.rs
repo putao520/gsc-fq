@@ -19,6 +19,15 @@ impl Totp {
         }
     }
 
+    /// Create TOTP with custom number of digits (for RFC 6238 compliance testing)
+    pub fn with_digits(secret: Vec<u8>, digits: u32) -> Self {
+        Self {
+            secret,
+            digits,
+            step_secs: 30,
+        }
+    }
+
     /// Create from Base32 string (standard Google Authenticator format)
     pub fn from_base32(secret_b32: &str) -> std::result::Result<Self, String> {
         let mut clean_secret = secret_b32.replace(" ", "").to_uppercase();
@@ -134,20 +143,37 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: TOTP HMAC implementation doesn't match RFC 6238 vectors (ring crate issue)"]
     fn test_rfc_6238_vectors() {
-        // T0 = 0, Time Step = 30, SHA1
-        // Secret = "12345678901234567890" (ASCII)
+        // RFC 6238 Appendix B - Test Vectors
+        // Secret = "12345678901234567890" (ASCII string, 20 bytes)
+        // Time Step X = 30, T0 = 0 (Unix epoch)
+        // Reference: https://datatracker.ietf.org/doc/html/rfc6238#appendix-B
+
         let secret = b"12345678901234567890".to_vec();
-        let totp = Totp::new(secret);
 
-        // Vector at T=59: counter = 1, expected 948123
-        // Actual: 287082 (HMAC: 75a48a19d4cbe100644e8ac1397eea747a2d33ab)
-        // Need to investigate: ring::hmac implementation or algorithm interpretation
-        assert_eq!(totp.generate(59), 948123);
+        // RFC 6238 test vectors use 8-digit codes
+        let totp = Totp::with_digits(secret.clone(), 8);
 
-        // Vector at T=1111111109: counter = 37037036, expected 081129 (81129)
-        assert_eq!(totp.generate(1111111109), 81129);
+        // Table 1, Row 1: T=59, T(Hex)=0000000000000001, TOTP=94287082 (SHA1)
+        assert_eq!(totp.generate(59), 94287082,
+                   "RFC 6238: T=59 should produce 94287082 (8-digit SHA1)");
+
+        // Table 1, Row 4: T=1111111109, T(Hex)=00000000023523EC, TOTP=07081804 (SHA1)
+        assert_eq!(totp.generate(1111111109), 7081804,
+                   "RFC 6238: T=1111111109 should produce 07081804 (8-digit SHA1)");
+
+        // Table 1, Row 5: T=1111111111, T(Hex)=00000000023523ED, TOTP=14050471 (SHA1)
+        assert_eq!(totp.generate(1111111111), 14050471,
+                   "RFC 6238: T=1111111111 should produce 14050471 (8-digit SHA1)");
+
+        // Table 1, Row 6: T=1234567890, T(Hex)=000000000273EF07, TOTP=89005924 (SHA1)
+        assert_eq!(totp.generate(1234567890), 89005924,
+                   "RFC 6238: T=1234567890 should produce 89005924 (8-digit SHA1)");
+
+        // Verify 6-digit mode also works (standard for Google Authenticator)
+        let totp_6 = Totp::with_digits(secret, 6);
+        assert_eq!(totp_6.generate(59), 287082,
+                   "6-digit mode: T=59 should produce 287082 (last 6 digits of 94287082)");
     }
 
     #[test]
