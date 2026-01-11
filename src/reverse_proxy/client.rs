@@ -7,6 +7,7 @@ use sha2::Digest;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
+use tokio::sync::broadcast;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use yamux::{Config, Connection, Mode};
 
@@ -18,6 +19,7 @@ pub struct ReverseProxyClient {
     config: ConfigFile,
     auth_token: Option<String>,
     totp_secret: Option<String>,
+    shutdown_tx: broadcast::Sender<()>,
 }
 
 impl ReverseProxyClient {
@@ -40,22 +42,32 @@ impl ReverseProxyClient {
             .as_ref()
             .and_then(|c| c.totp_secret.clone());
 
+        let (shutdown_tx, _) = broadcast::channel(1);
+
         Self {
             server_addr,
             config,
             auth_token,
             totp_secret,
+            shutdown_tx,
         }
     }
 
     /// Create new reverse proxy client with custom auth token
     pub fn new_with_token(server_addr: SocketAddr, config: ConfigFile, auth_token: String) -> Self {
+        let (shutdown_tx, _) = broadcast::channel(1);
         Self {
             server_addr,
             config,
             auth_token: Some(auth_token),
             totp_secret: None,
+            shutdown_tx,
         }
+    }
+
+    /// Get a shutdown sender for this client
+    pub fn shutdown_token(&self) -> broadcast::Sender<()> {
+        self.shutdown_tx.clone()
     }
 
     /// Start the reverse proxy client with automatic reconnection
@@ -64,8 +76,15 @@ impl ReverseProxyClient {
         let mut backoff_seconds = 1u64;
         const MAX_BACKOFF: u64 = 60;
         const MAX_RETRIES: u64 = 10;
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         loop {
+            // Check for shutdown signal before attempting connection
+            if shutdown_rx.try_recv().is_ok() {
+                println!("🛑 Reverse Proxy Client shutting down...");
+                return Ok(());
+            }
+
             if retry_count >= MAX_RETRIES {
                 error_println!(
                     "Maximum retry attempts ({}) exceeded, giving up",
@@ -78,7 +97,9 @@ impl ReverseProxyClient {
                 .into());
             }
 
-            match self.run_connection().await {
+            // Pass shutdown receiver to run_connection
+            let shutdown_rx_clone = shutdown_rx.resubscribe();
+            match self.run_connection_with_shutdown(shutdown_rx_clone).await {
                 Ok(_) => {
                     println!("✅ Connection completed successfully");
                     return Ok(());
@@ -88,11 +109,18 @@ impl ReverseProxyClient {
                     error_println!("Connection failed (attempt {}): {}", retry_count, e);
 
                     if retry_count < MAX_RETRIES {
-                        println!(
-                            "🔄 Reconnecting in {} seconds... (attempt {}/{})",
-                            backoff_seconds, retry_count, MAX_RETRIES
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_secs(backoff_seconds)).await;
+                        // Check for shutdown during backoff
+                        let mut backoff_rx = self.shutdown_tx.subscribe();
+                        let sleep_duration = tokio::time::Duration::from_secs(backoff_seconds);
+
+                        tokio::select! {
+                            _ = tokio::time::sleep(sleep_duration) => {}
+                            _ = backoff_rx.recv() => {
+                                println!("🛑 Reverse Proxy Client shutting down during backoff...");
+                                return Ok(());
+                            }
+                        }
+
                         backoff_seconds = (backoff_seconds * 2).min(MAX_BACKOFF);
                     }
                 }
@@ -100,8 +128,8 @@ impl ReverseProxyClient {
         }
     }
 
-    /// Run a single connection session
-    async fn run_connection(&mut self) -> Result<()> {
+    /// Run a single connection session with shutdown support
+    async fn run_connection_with_shutdown(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<()> {
         // 1. 解析代理配置
         let proxy_configs = self.parse_proxy_configs()?;
 
@@ -142,27 +170,38 @@ impl ReverseProxyClient {
 
         // 6. 主循环：处理来自服务端的流
         loop {
-            match poll_fn(|cx| conn.poll_next_inbound(cx)).await {
-                Some(Ok(yamux_stream)) => {
-                    debug_println!("🔧 Received new tunnel stream from server");
+            tokio::select! {
+                // Check for shutdown signal
+                _ = shutdown_rx.recv() => {
+                    println!("🛑 Reverse Proxy Client shutting down (Yamux loop)...");
+                    return Ok(());
+                }
 
-                    let configs = proxy_configs.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = Self::handle_tunnel_stream(yamux_stream, configs).await {
-                            error_println!("❌ Tunnel stream error: {}", e);
+                // Handle incoming yamux streams
+                stream_result = poll_fn(|cx| conn.poll_next_inbound(cx)) => {
+                    match stream_result {
+                        Some(Ok(yamux_stream)) => {
+                            debug_println!("🔧 Received new tunnel stream from server");
+
+                            let configs = proxy_configs.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = Self::handle_tunnel_stream(yamux_stream, configs).await {
+                                    error_println!("❌ Tunnel stream error: {}", e);
+                                }
+                            });
                         }
-                    });
-                }
-                Some(Err(e)) => {
-                    error_println!("❌ Yamux connection error: {}", e);
-                    return Err(ReverseProxyError::ConnectionFailed(e.to_string()).into());
-                }
-                None => {
-                    debug_println!("🔧 Yamux connection closed by server");
-                    return Err(ReverseProxyError::ConnectionFailed(
-                        "Connection closed by server".to_string(),
-                    )
-                    .into());
+                        Some(Err(e)) => {
+                            error_println!("❌ Yamux connection error: {}", e);
+                            return Err(ReverseProxyError::ConnectionFailed(e.to_string()).into());
+                        }
+                        None => {
+                            debug_println!("🔧 Yamux connection closed by server");
+                            return Err(ReverseProxyError::ConnectionFailed(
+                                "Connection closed by server".to_string(),
+                            )
+                            .into());
+                        }
+                    }
                 }
             }
         }

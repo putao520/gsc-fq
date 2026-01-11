@@ -49,6 +49,7 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
     println!("🔄 启动反向代理服务端");
     let bind_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
     let mut server = ReverseProxyServer::new(bind_ip, PROXY_SERVER_PORT);
+    let server_shutdown = server.shutdown_token();
     let server_handle = tokio::spawn(async move {
         let _ = server.start().await;
     });
@@ -58,8 +59,9 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
     // 4. 启动反向代理客户端
     println!("🔗 启动反向代理客户端");
     let server_addr = std::net::SocketAddr::new(bind_ip, PROXY_SERVER_PORT);
+    let mut client = ReverseProxyClient::new(server_addr, config);
+    let client_shutdown = client.shutdown_token();
     let client_handle = tokio::spawn(async move {
-        let mut client = ReverseProxyClient::new(server_addr, config);
         let _ = client.start().await;
     });
 
@@ -164,14 +166,30 @@ async fn test_bidirectional_data_transfer() -> Result<()> {
     }
     println!("✅ 并发连接测试完成");
 
-    // 7. 清理资源
-    println!("🧹 清理资源");
-    client_handle.abort();
-    server_handle.abort();
-    echo_server.shutdown().await?;
+    // 7. 清理资源（使用优雅关闭）
+    println!("🧹 清理资源 - 发送 shutdown 信号");
+    // 发送 shutdown 信号
+    let _ = client_shutdown.send(());
+    let _ = server_shutdown.send(());
 
-    let _ = client_handle.await;
-    let _ = server_handle.await;
+    // 等待任务完成（超时 5 秒）
+    let timeout_duration = tokio::time::Duration::from_secs(5);
+    let client_result = tokio::time::timeout(timeout_duration, client_handle).await;
+    let server_result = tokio::time::timeout(timeout_duration, server_handle).await;
+
+    match (client_result, server_result) {
+        (Ok(Ok(_)), Ok(Ok(_))) => {
+            println!("✅ 客户端和服务端正常关闭");
+        }
+        (Err(_), _) | (_, Err(_)) => {
+            println!("⚠️  关闭超时，这可能表示有资源泄露");
+        }
+        (Ok(Err(e)), _) | (_, Ok(Err(e))) => {
+            println!("⚠️  任务返回错误: {:?}", e);
+        }
+    }
+
+    echo_server.shutdown().await?;
 
     println!("✅ 双向数据传输测试完成");
     Ok(())

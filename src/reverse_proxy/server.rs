@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use yamux::{Config, Connection, Mode};
@@ -23,6 +23,7 @@ pub struct ReverseProxyServer {
     allowed_tokens: Vec<String>,
     totp_secret: Option<String>,
     cleanup_task: Option<tokio::task::JoinHandle<()>>,
+    shutdown_tx: broadcast::Sender<()>,
 }
 
 impl ReverseProxyServer {
@@ -30,6 +31,7 @@ impl ReverseProxyServer {
     pub fn new(bind_ip: std::net::IpAddr, control_port: u16) -> Self {
         let control_addr = SocketAddr::new(bind_ip, control_port);
         let clients = Arc::new(Mutex::new(HashMap::new()));
+        let (shutdown_tx, _) = broadcast::channel(1);
 
         // Start cleanup task
         let cleanup_task = Self::start_cleanup_task(clients.clone());
@@ -41,7 +43,13 @@ impl ReverseProxyServer {
             allowed_tokens: Vec::new(),
             totp_secret: None,
             cleanup_task: Some(cleanup_task),
+            shutdown_tx,
         }
+    }
+
+    /// Get a shutdown sender for this server
+    pub fn shutdown_token(&self) -> broadcast::Sender<()> {
+        self.shutdown_tx.clone()
     }
 
     /// Set TOTP secret
@@ -144,6 +152,7 @@ impl ReverseProxyServer {
     ) -> Self {
         let control_addr = SocketAddr::new(bind_ip, control_port);
         let clients = Arc::new(Mutex::new(HashMap::new()));
+        let (shutdown_tx, _) = broadcast::channel(1);
 
         let cleanup_task = Self::start_cleanup_task(clients.clone());
 
@@ -154,6 +163,7 @@ impl ReverseProxyServer {
             allowed_tokens,
             totp_secret: None, // Added totp_secret initialization
             cleanup_task: Some(cleanup_task),
+            shutdown_tx,
         }
     }
 
@@ -162,35 +172,55 @@ impl ReverseProxyServer {
         let listener = TcpListener::bind(self.control_addr).await?;
         println!("🔄 Reverse Proxy Server listening on {}", self.control_addr);
 
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    debug_println!("New control connection from {}", addr);
-                    let clients = self.clients.clone();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
-                    let auth_token = self.auth_token.clone();
-                    let allowed_tokens = self.allowed_tokens.clone();
-                    let totp_secret = self.totp_secret.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(
-                            stream,
-                            addr,
-                            clients,
-                            auth_token,
-                            allowed_tokens,
-                            totp_secret,
-                        )
-                        .await
-                        {
-                            error_println!("Client {} error: {}", addr, e);
+        loop {
+            tokio::select! {
+                // Accept new connections
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((stream, addr)) => {
+                            debug_println!("New control connection from {}", addr);
+                            let clients = self.clients.clone();
+
+                            let auth_token = self.auth_token.clone();
+                            let allowed_tokens = self.allowed_tokens.clone();
+                            let totp_secret = self.totp_secret.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = Self::handle_client(
+                                    stream,
+                                    addr,
+                                    clients,
+                                    auth_token,
+                                    allowed_tokens,
+                                    totp_secret,
+                                )
+                                .await
+                                {
+                                    error_println!("Client {} error: {}", addr, e);
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            error_println!("Accept error: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    error_println!("Accept error: {}", e);
+
+                // Check for shutdown signal
+                _ = shutdown_rx.recv() => {
+                    println!("🛑 Reverse Proxy Server shutting down...");
+                    break;
                 }
             }
         }
+
+        // Cleanup: close all client connections
+        let clients = self.clients.lock().await;
+        debug_println!("Closing {} client sessions", clients.len());
+        drop(clients);
+
+        Ok(())
     }
 
     /// Handle client connection
