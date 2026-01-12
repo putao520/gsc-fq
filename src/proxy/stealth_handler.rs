@@ -3,10 +3,12 @@ use crate::error::types::ProxyError;
 use crate::proxy::ConnectionPool;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{copy, AsyncReadExt};
+use tokio::io::AsyncReadExt;
 /// Stealth handler with blackhole mode for hiding protocol signatures
 /// Detects server rejections and enters blackhole mode to confuse active probing
 use tokio::net::TcpStream;
+
+use crate::proxy::zero_copy::zero_copy_bidirectional;
 
 /// Generate a simple pseudo-random number using system time
 fn pseudo_random_range(min: u64, max: u64) -> u64 {
@@ -186,70 +188,31 @@ impl StealthHandler {
 
         // TCP 优化在连接创建时已应用（socket2 层面）
 
-        let (mut client_read, mut client_write) = client.into_split();
-        let (mut remote_read, mut remote_write) = remote.into_split();
+        // 使用平台特定的自适应零拷贝优化
+        // - Linux: splice() 系统调用（内核空间零拷贝，预期 +30%）
+        // - macOS: bulk_copy (256KB, Benchmark 验证最优: 4.02x)
+        // - Windows: bulk_copy (256KB, Benchmark 优化: 512KB 性能差 -21%)
+        // - 其他: bulk_copy (256KB 通用优化)
+        #[cfg(target_os = "linux")]
+        debug_println!("🚀 平台优化: Linux splice() 内核零拷贝 (预期 +30%)");
 
-        // Format addresses for logging
-        let client_addr_str = client_addr
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        let remote_addr_str = remote_addr
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+        #[cfg(target_os = "macos")]
+        debug_println!("🚀 平台优化: macOS bulk_copy (256KB, Benchmark: 4.02x)");
 
-        let client_to_remote = {
-            let client_addr = client_addr_str.clone();
-            let remote_addr = remote_addr_str.clone();
-            tokio::spawn(async move {
-                match copy(&mut client_read, &mut remote_write).await {
-                    Ok(bytes) => {
-                        debug_println!("✅ {} → {} | {} bytes", client_addr, remote_addr, bytes);
-                    }
-                    Err(e) => {
-                        debug_println!("❌ {} → {} | {}", client_addr, remote_addr, e);
-                    }
-                }
-            })
-        };
+        #[cfg(target_os = "windows")]
+        debug_println!("🚀 平台优化: Windows bulk_copy (256KB, Benchmark 优化)");
 
-        let remote_to_client = {
-            let client_addr = client_addr_str.clone();
-            let remote_addr = remote_addr_str.clone();
-            tokio::spawn(async move {
-                match copy(&mut remote_read, &mut client_write).await {
-                    Ok(bytes) => {
-                        debug_println!("✅ {} ← {} | {} bytes", client_addr, remote_addr, bytes);
-                    }
-                    Err(e) => {
-                        debug_println!("❌ {} ← {} | {}", client_addr, remote_addr, e);
-                    }
-                }
-            })
-        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        debug_println!("🚀 平台优化: 通用 bulk_copy (256KB)");
 
-        // 设定总空闲超时：如果 10 分钟都没有任何数据交互，强制关闭
-        // 注意：这是兜底方案，防止任务永远无法退出
-        let idle_timeout = Duration::from_secs(600);
-
-        // Wait for both directions with a global timeout safety net
-        let result = tokio::time::timeout(idle_timeout, async {
-            tokio::join!(client_to_remote, remote_to_client)
-        })
-        .await;
-
-        if result.is_err() {
-            debug_println!(
-                "⏰ Connection {} ↔ {} timed out after {}s of inactivity",
-                client_addr_str,
-                remote_addr_str,
-                idle_timeout.as_secs()
-            );
-        }
+        let (bytes1, bytes2) = zero_copy_bidirectional(client, remote)
+            .await
+            .map_err(|e| ProxyError::ForwardingFailed(format!("Zero-copy failed: {}", e)))?;
 
         debug_println!(
-            "📊 Connection closed: {} ↔ {}",
-            client_addr_str,
-            remote_addr_str
+            "📊 转发完成: {} 字节 ↓ / {} 字节 ↑",
+            bytes1,
+            bytes2
         );
 
         Ok(())

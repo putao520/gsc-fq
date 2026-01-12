@@ -1,4 +1,8 @@
+pub mod adaptive_copy;
+pub mod adaptive_stream;
 pub mod blackhole;
+#[cfg(target_os = "linux")]
+pub mod splice_optimizer;
 pub mod connection_pool;
 pub mod connection_metrics;
 pub mod connection_selector;
@@ -14,6 +18,8 @@ pub mod zero_copy;
 
 // Explicit exports to avoid ambiguous glob re-exports warning
 // Only re-export the most commonly used items
+pub use adaptive_copy::adaptive_copy;
+pub use adaptive_stream::adaptive_stream_copy;
 pub use connection_pool::ConnectionPool;
 pub use connection_selector::SelectionStrategy;
 pub use handler::ConnectionHandler;

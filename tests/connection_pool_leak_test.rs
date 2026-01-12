@@ -40,6 +40,11 @@ async fn test_connection_pool_fixed_size() {
 
     sleep(Duration::from_millis(100)).await;
 
+    // 等待服务器完全启动（避免触发黑洞检测）
+    // 测试服务器需要时间开始 accept() 循环
+    eprintln!("⏳ 等待服务器启动...");
+    sleep(Duration::from_secs(1)).await;
+
     // 创建连接池
     let pool = ConnectionPool::new(addr, None);
     pool.start().await.unwrap();
@@ -132,6 +137,10 @@ async fn test_connection_pool_no_memory_leak() {
     });
 
     sleep(Duration::from_millis(100)).await;
+
+    // 等待服务器完全启动（避免触发黑洞检测）
+    eprintln!("⏳ 等待服务器启动...");
+    sleep(Duration::from_secs(1)).await;
 
     let pool = ConnectionPool::new(addr, None);
     pool.start().await.unwrap();

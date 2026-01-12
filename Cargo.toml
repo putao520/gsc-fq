@@ -1,6 +1,6 @@
 [package]
 name = "gsc-fq"
-version = "0.8.10"
+version = "0.9.0"
 edition = "2021"
 authors = ["putao520 <yuyao1022@hotmail.com>"]
 description = "High-performance TCP proxy with enterprise-grade encryption, TOKEN authentication, CPU hardware acceleration, and reverse proxy capabilities"
@@ -48,6 +48,7 @@ rustls-pemfile = "2.2"
 
 # 网络和系统
 socket2 = { version = "0.6.1", features = ["all"] }
+libc = "0.2"  # Linux 系统调用（splice、pipe、fcntl 等）
 nix = { version = "0.30", features = ["socket", "net", "uio", "zerocopy"] }
 
 # 多路复用
@@ -77,6 +78,10 @@ rand = "0.9"
 [[bin]]
 name = "gsc-fq"
 path = "src/main.rs"
+
+[[bench]]
+name = "zero_copy_comparison"
+harness = false
 
 [profile.release]
 lto = true

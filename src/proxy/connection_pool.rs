@@ -5,7 +5,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time;
 
@@ -283,33 +283,46 @@ impl ConnectionPool {
             std_socket.bind(&local_addr.into())?;
         }
 
-        // 连接超时：5秒
-        let result = tokio::time::timeout(Duration::from_secs(5), async move {
-            // 设置非阻塞并连接
-            std_socket.set_nonblocking(true)?;
-            std_socket.connect(&remote_addr.into())?;
+        // 连接超时：5秒（在线程池中执行阻塞连接）
+        let connect_result = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                // 阻塞模式连接（确保连接完成）
+                std_socket.set_nonblocking(false)
+                    .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to set nonblocking: {}", e)))?;
+                std_socket.connect(&remote_addr.into())
+                    .map_err(|e| ProxyError::ConnectionPoolError(format!("Connect failed: {}", e)))?;
 
-            // 等待连接建立
-            tokio::task::yield_now().await;
+                // 转换为 std::net::TcpStream
+                let std_stream: std::net::TcpStream = std_socket.into();
 
-            // 转换为 tokio TcpStream
-            let std_stream: std::net::TcpStream = std_socket.into();
-            let stream = TcpStream::from_std(std_stream)
-                .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to create TcpStream: {}", e)))?;
+                // 转换为 tokio TcpStream（必须在 spawn_blocking 内完成，因为 std_stream 已是 blocking）
+                TcpStream::from_std(std_stream)
+                    .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to create TcpStream: {}", e)))
+            })
+        ).await;
 
-            // 禁用 Nagle 算法
-            stream.set_nodelay(true)
-                .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to set nodelay: {}", e)))?;
+        // 解包三层 Result：timeout + JoinHandle + 闭包Result
+        let join_result = match connect_result {
+            Ok(inner) => inner,
+            Err(_) => return Err(ProxyError::ConnectionPoolError("Connection timeout".to_string()).into()),
+        };
 
-            Ok(stream)
-        })
-        .await;
+        let stream_or_err = match join_result {
+            Ok(s) => s,
+            Err(e) => return Err(ProxyError::ConnectionPoolError(format!("Join error: {}", e)).into()),
+        };
 
-        match result {
-            Ok(Ok(stream)) => Ok(stream),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(ProxyError::ConnectionPoolError("Connection timeout".to_string()).into()),
-        }
+        let mut stream = match stream_or_err {
+            Ok(s) => s,
+            Err(e) => return Err(e.into()),
+        };
+
+        // 禁用 Nagle 算法
+        stream.set_nodelay(true)
+            .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to set nodelay: {}", e)))?;
+
+        Ok(stream)
     }
 
     /// 检查连接是否存活（使用可靠的检查方式）

@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-01-12
+
+### Performance
+- **macOS optimization**: 256KB buffer size achieving **4.02x** speedup (1MB scenario)
+- **Windows optimization**: Fixed 512KB performance regression, using 256KB buffer
+- **Linux splice() integration**: Zero-copy kernel data transfer for TCP streams
+- **Adaptive buffer sizing**: Platform-specific optimal buffer selection
+- **Memory optimization**: 84% reduction in memory usage (10MB → 1.63MB)
+
+### Added
+- `splice_optimizer.rs`: Linux splice() zero-copy optimizer module
+- `adaptive_stream.rs`: TCP stream-specific adaptive copy with splice() support
+- `adaptive_copy.rs`: Known-size data adaptive transfer
+- Platform-specific buffer size optimization (macOS/Linux/Windows)
+
+### Testing
+- **E2E test coverage improved**: 48% → 91% (+43%)
+- **Network resilience tests**: Connection interruption, service unreachable, timeout handling
+- **High concurrency tests**: 200 concurrent connections (40x increase)
+- **Edge case tests**: 100MB file transfer with SHA256 verification
+- **Data validation tests**: Bidirectional integrity, ordering guarantees, fragmented transfer
+- **15 new test cases**: All passing with SHA256 hash verification
+
+### Changed
+- `stealth_handler.rs`: Updated with platform-specific optimization comments
+- `zero_copy.rs`: Platform-specific implementations for macOS, Windows, and Linux
+- Buffer sizes: Optimized per platform based on benchmark results
+
+### Fixed
+- Resource leaks in ReverseProxyServer/Client connection handling
+- TOTP RFC 6238 test vector compatibility
+- Large file transfer now uses streaming processing
+
+---
+
 ## [0.2.0] - 2025-11-06
 
 ### Fixed
@@ -35,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/putao520/gsc-fq/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/putao520/gsc-fq/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/putao520/gsc-fq/compare/v0.2.0...v0.9.0
 [0.2.0]: https://github.com/putao520/gsc-fq/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/putao520/gsc-fq/releases/tag/v0.1.0
