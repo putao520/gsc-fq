@@ -13,7 +13,6 @@ pub mod resilient;
 pub mod server;
 pub mod stealth_connection_handler;
 pub mod stealth_handler;
-#[cfg(target_os = "linux")]
 pub mod zero_copy;
 
 // Explicit exports to avoid ambiguous glob re-exports warning
