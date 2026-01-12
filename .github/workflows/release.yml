@@ -72,10 +72,8 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            mv gsc-fq.exe gsc-fq.exe
             7z a ../../${{ matrix.artifact_name }}.zip gsc-fq.exe
           else
-            mv gsc-fq gsc-fq
             tar czf ../../${{ matrix.artifact_name }}.tar.gz gsc-fq
           fi
         shell: bash
