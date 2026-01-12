@@ -1,4 +1,5 @@
 use crate::error::{ProxyError, Result};
+use socket2::{Socket, Domain, Type, Protocol};
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -258,32 +259,57 @@ impl ConnectionPool {
         remote_addr: SocketAddr,
         source_ip: Option<IpAddr>,
     ) -> Result<TcpStream> {
-        let stream = if let Some(source_ip) = source_ip {
-            // 使用指定的源 IP
-            let socket = if source_ip.is_ipv4() {
-                TcpSocket::new_v4()?
-            } else {
-                TcpSocket::new_v6()?
-            };
+        // 使用 socket2 创建连接，以便设置 TCP 缓冲区
+        let std_socket = Socket::new(
+            if remote_addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 },
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
 
+        // 设置 TCP 缓冲区大小（高吞吐优化）
+        // 发送缓冲区：2MB
+        // 接收缓冲区：2MB
+        // 这对于千兆网络（RTT 10ms）的 BDP = 1.25MB 已经足够
+        if let Err(e) = std_socket.set_send_buffer_size(2 * 1024 * 1024) {
+            eprintln!("⚠️  Failed to set send buffer size: {}", e);
+        }
+        if let Err(e) = std_socket.set_recv_buffer_size(2 * 1024 * 1024) {
+            eprintln!("⚠️  Failed to set recv buffer size: {}", e);
+        }
+
+        // 绑定源 IP（如果指定）
+        if let Some(source_ip) = source_ip {
             let local_addr = SocketAddr::new(source_ip, 0);
-            socket.bind(local_addr)?;
+            std_socket.bind(&local_addr.into())?;
+        }
 
-            // 连接超时：5秒
-            tokio::time::timeout(Duration::from_secs(5), socket.connect(remote_addr))
-                .await
-                .map_err(|_| ProxyError::ConnectionPoolError("Connection timeout".to_string()))??
-        } else {
-            // 使用默认源 IP
-            tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(remote_addr))
-                .await
-                .map_err(|_| ProxyError::ConnectionPoolError("Connection timeout".to_string()))??
-        };
+        // 连接超时：5秒
+        let result = tokio::time::timeout(Duration::from_secs(5), async move {
+            // 设置非阻塞并连接
+            std_socket.set_nonblocking(true)?;
+            std_socket.connect(&remote_addr.into())?;
 
-        // 应用 TCP 优化
-        stream.set_nodelay(true)?;
+            // 等待连接建立
+            tokio::task::yield_now().await;
 
-        Ok(stream)
+            // 转换为 tokio TcpStream
+            let std_stream: std::net::TcpStream = std_socket.into();
+            let stream = TcpStream::from_std(std_stream)
+                .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to create TcpStream: {}", e)))?;
+
+            // 禁用 Nagle 算法
+            stream.set_nodelay(true)
+                .map_err(|e| ProxyError::ConnectionPoolError(format!("Failed to set nodelay: {}", e)))?;
+
+            Ok(stream)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(ProxyError::ConnectionPoolError("Connection timeout".to_string()).into()),
+        }
     }
 
     /// 检查连接是否存活（使用可靠的检查方式）
