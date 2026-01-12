@@ -12,8 +12,8 @@ use tokio::time;
 const INITIAL_POOL_SIZE: usize = 50; // 固定池大小：50个连接
 const MAX_POOL_SIZE: usize = 50; // 最大池大小：50个连接（固定大小，不扩张）
 const PREHEAT_DELAY_MS: u64 = 100; // 预热时每个连接间隔 100ms
-const REFILL_DELAY_MS: u64 = 1000; // 补充连接延迟 1s
-const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒
+const REFILL_DELAY_MS: u64 = 100; // 补充连接延迟 100ms（快速补充）
+const MAINTENANCE_INTERVAL_SECS: u64 = 10; // 维护周期：10秒（快速清理失效连接）
 const BLACKHOLE_FAILURE_THRESHOLD: u32 = 3; // 黑洞服务器检测阈值：连续3次连接失败
 
 // 运行时可配置的黑洞检测阈值
@@ -249,14 +249,27 @@ impl ConnectionPool {
         Ok(stream)
     }
 
-    /// 检查连接是否存活
+    /// 检查连接是否存活（使用可靠的检查方式）
     async fn is_connection_alive(stream: &TcpStream) -> bool {
-        // 尝试 peek 操作（不消耗数据）
-        // 如果连接已断开，peek 会立即返回错误
+        // 方法1：尝试 peek 操作（不消耗数据）
+        // 如果远端已关闭，peek 会立即返回错误
         let mut buf = [0u8; 1];
         match stream.try_read(&mut buf) {
-            Ok(_) => true,  // 连接活跃
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => true, // 无数据但连接正常
+            Ok(n) => {
+                // 读到数据说明连接肯定活跃
+                n > 0
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // 无数据但连接可能正常
+                // 方法2：检查本地socket错误状态
+                if let Ok(err) = stream.take_error() {
+                    // 有待处理的错误，说明连接已断开
+                    err.is_none()
+                } else {
+                    // 无法获取错误状态，保守认为连接正常
+                    true
+                }
+            }
             Err(_) => false, // 连接已断开
         }
     }
@@ -283,6 +296,7 @@ impl ConnectionPool {
 
                 // 清理失效连接
                 let mut pool_guard = pool.lock().await;
+                let initial_size = pool_guard.len();
                 let mut valid_connections = VecDeque::new();
 
                 while let Some(stream) = pool_guard.pop_front() {
@@ -291,6 +305,8 @@ impl ConnectionPool {
                     }
                     // 失效的连接自动丢弃
                 }
+
+                let dead_connections = initial_size - valid_connections.len();
 
                 // 强制执行目标大小限制（清理多余连接）
                 let target_limit = pool_size.load(Ordering::Relaxed);
@@ -303,6 +319,26 @@ impl ConnectionPool {
                 drop(pool_guard); // 释放锁
 
                 let target_size = pool_size.load(Ordering::Relaxed);
+
+                // 监控和告警
+                if dead_connections > 0 {
+                    eprintln!(
+                        "⚠️  清理了 {} 个失效连接 ({} → {}/{})",
+                        dead_connections,
+                        initial_size,
+                        current_size,
+                        target_size
+                    );
+                }
+
+                if current_size < target_size / 2 {
+                    eprintln!(
+                        "🚨 连接池健康度低：{}/{} ({:.0}%)",
+                        current_size,
+                        target_size,
+                        (current_size as f64 / target_size as f64) * 100.0
+                    );
+                }
 
                 // 如果低于目标大小，只补充一个连接（避免批量创建）
                 if current_size < target_size {
