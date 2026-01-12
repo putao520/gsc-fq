@@ -9,13 +9,11 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::time;
 
 // 优化后的连接池策略（性能优先，仍保持安全性）
-const INITIAL_POOL_SIZE: usize = 50; // 初始池大小：50个连接（提升3.3倍）
-const MAX_POOL_SIZE: usize = 200; // 最大池大小：200个连接（提升6.7倍，支持高并发）
-const PREHEAT_DELAY_MS: u64 = 100; // 预热时每个连接间隔 100ms（加速预热，5秒完成）
-const REFILL_DELAY_MS: u64 = 1000; // 补充连接延迟 1s（降低延迟，更快响应）
-const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒（低频检查）
-const IDLE_SHRINK_THRESHOLD: usize = 5; // 空闲收缩阈值：连续5次检查池满则收缩
-const EXPANSION_MISS_THRESHOLD: f64 = 0.3; // 扩张阈值：miss率超过30%则考虑扩张
+const INITIAL_POOL_SIZE: usize = 50; // 固定池大小：50个连接
+const MAX_POOL_SIZE: usize = 50; // 最大池大小：50个连接（固定大小，不扩张）
+const PREHEAT_DELAY_MS: u64 = 100; // 预热时每个连接间隔 100ms
+const REFILL_DELAY_MS: u64 = 1000; // 补充连接延迟 1s
+const MAINTENANCE_INTERVAL_SECS: u64 = 30; // 维护周期：30秒
 const BLACKHOLE_FAILURE_THRESHOLD: u32 = 3; // 黑洞服务器检测阈值：连续3次连接失败
 
 // 运行时可配置的黑洞检测阈值
@@ -263,7 +261,7 @@ impl ConnectionPool {
         }
     }
 
-    /// 启动后台维护任务（低频检查+自适应收缩）
+    /// 启动后台维护任务（低频检查+固定大小）
     fn spawn_maintenance_task(&self) {
         let pool = Arc::clone(&self.pool);
         let remote_addr = self.remote_addr;
@@ -275,7 +273,6 @@ impl ConnectionPool {
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(MAINTENANCE_INTERVAL_SECS));
-            let mut idle_full_count = 0; // 连续池满计数
 
             loop {
                 interval.tick().await;
@@ -320,30 +317,17 @@ impl ConnectionPool {
                             }
                         }
                     }
-                    idle_full_count = 0; // 重置计数
-                } else if current_size >= target_size {
-                    // 池满时，记录空闲状态
-                    idle_full_count += 1;
-
-                    // 连续多次池满且无使用，考虑收缩
-                    if idle_full_count >= IDLE_SHRINK_THRESHOLD && target_size > INITIAL_POOL_SIZE {
-                        pool_size.store(target_size - 1, Ordering::Relaxed);
-                        idle_full_count = 0;
-                    }
                 }
             }
         });
     }
 
-    /// 触发异步补充任务（延迟+节流+自适应扩张）
+    /// 触发异步补充任务（延迟+节流）
     ///
-    /// 自适应扩张策略：
-    /// 1. 延迟2秒后补充（避免频繁连接）
-    /// 2. 只补充一个连接（避免突发）
-    /// 3. 根据 miss 率智能扩张：
-    ///    - miss率 > 30%: 考虑扩张池大小
-    ///    - 池已满: 增加目标大小
-    ///    - 最大限制: MAX_POOL_SIZE (30)
+    /// 补充策略：
+    /// 1. 延迟1秒后补充（避免频繁连接）
+    /// 2. 只在池未满时补充一个连接（避免突发）
+    /// 3. 补充到固定目标大小（INITIAL_POOL_SIZE），不扩张
     fn spawn_refill_task(&self) {
         let pool = Arc::clone(&self.pool);
         let remote_addr = self.remote_addr;
@@ -367,42 +351,15 @@ impl ConnectionPool {
 
             // 尝试获取信号量许可（限制并发创建连接数）
             if let Ok(_permit) = semaphore.try_acquire() {
-                // 在持有许可的情况下检查池状态，减少竞争导致的超限创建
                 let current_size = pool.lock().await.len();
                 let target_size = pool_size.load(Ordering::Relaxed);
 
-                // 计算 miss 率
-                let hits = stats.pool_hits.load(Ordering::Relaxed);
-                let misses = stats.pool_misses.load(Ordering::Relaxed);
-                let total = hits + misses;
-                let miss_rate = if total > 0 {
-                    misses as f64 / total as f64
-                } else {
-                    0.0
-                };
-
-                // 只在確實需要時補充
+                // 只在池未满时补充（不扩张）
                 if current_size < target_size {
                     match Self::create_connection(remote_addr, source_ip).await {
                         Ok(stream) => {
                             pool.lock().await.push_back(stream);
                             stats.total_created.fetch_add(1, Ordering::Relaxed);
-
-                            // 自适应扩张：根据 miss 率和池状态决定是否扩张
-                            // 使用刚获取的 sizes
-                            if current_size + 1 >= target_size
-                                && target_size < MAX_POOL_SIZE
-                                && miss_rate > EXPANSION_MISS_THRESHOLD
-                            {
-                                let new_size = target_size + 1;
-                                pool_size.store(new_size, Ordering::Relaxed);
-                                eprintln!(
-                                    "📈 Pool expanding: {} -> {} (miss rate: {:.1}%)",
-                                    target_size,
-                                    new_size,
-                                    miss_rate * 100.0
-                                );
-                            }
                         }
                         Err(_) => {
                             stats.connection_failures.fetch_add(1, Ordering::Relaxed);

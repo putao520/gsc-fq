@@ -93,7 +93,7 @@ async fn test_large_file_transfer_with_resource_monitoring() -> Result<()> {
     ).await??;
 
     // 流式下载：使用固定大小缓冲区，边读边计算 hash
-    let mut buffer = vec![0u8; 64 * 1024]; // 64KB 固定缓冲区
+    let mut buffer = vec![0u8; 32 * 1024 * 1024]; // 32MB 固定缓冲区
     let mut hasher = Sha256::new();
     let mut total_bytes = 0;
 
