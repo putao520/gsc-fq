@@ -377,8 +377,8 @@ impl ConnectionPool {
                     );
                 }
 
-                // 如果低于目标大小，只补充一个连接（避免批量创建）
-                if current_size < target_size {
+                // 如果低于目标大小，批量补充到目标大小
+                while pool.lock().await.len() < target_size {
                     if let Ok(_permit) = semaphore.try_acquire() {
                         match Self::create_connection(remote_addr, source_ip).await {
                             Ok(stream) => {
@@ -387,8 +387,11 @@ impl ConnectionPool {
                             }
                             Err(_) => {
                                 stats.connection_failures.fetch_add(1, Ordering::Relaxed);
+                                break; // 创建失败，停止补充
                             }
                         }
+                    } else {
+                        break; // 信号量满，停止补充
                     }
                 }
             }
