@@ -31,14 +31,15 @@
 
 ## 🌟 Features
 
-### Proxy Modes
+### Service Types
 
 | Feature | Description | Use Cases |
 |---------|-------------|-----------|
 | **Forward Proxy** | Forward local port to remote service | Jump Box, internal network penetration |
 | **Reverse Proxy** | Expose internal services via stealth tunnel | Remote work, service exposure |
-| **Hybrid Mode** | Run both forward and reverse in one process | Complex network topologies |
-| **UDP over TCP** | Stable UDP traffic forwarding | Gaming, DNS, video streaming |
+| **UDP Forwarding** | Stable UDP traffic forwarding | Gaming, DNS, video streaming |
+
+> **Note**: All configured services start automatically based on your config file. No need to specify modes.
 
 ### Security Features
 
@@ -76,8 +77,8 @@ curl -sSLf https://raw.githubusercontent.com/putao520/gsc-fq/main/install.sh | s
 ### Option 3: Docker
 
 ```bash
-docker pull ghcr.io/putao520/gsc-fq:v0.9.0
-docker run -v $(pwd)/config.toml:/app/config.toml ghcr.io/putao520/gsc-fq:v0.9.0
+docker pull ghcr.io/putao520/gsc-fq:v0.9.1
+docker run -v $(pwd)/config.toml:/app/config.toml ghcr.io/putao520/gsc-fq:v0.9.1
 ```
 
 ### Option 4: Pre-built Binaries
@@ -86,35 +87,35 @@ Download pre-built binaries from [GitHub Releases](https://github.com/putao520/g
 
 **Linux** (x86_64):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-linux-x86_64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-linux-x86_64.tar.gz
 tar xzf gsc-fq-linux-x86_64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **Linux** (aarch64):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-linux-aarch64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-linux-aarch64.tar.gz
 tar xzf gsc-fq-linux-aarch64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **macOS** (Intel):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-macos-x86_64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-macos-x86_64.tar.gz
 tar xzf gsc-fq-macos-x86_64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **macOS** (Apple Silicon):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-macos-aarch64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-macos-aarch64.tar.gz
 tar xzf gsc-fq-macos-aarch64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **Windows** (x86_64):
 ```powershell
-# Download from: https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-windows-x86_64.zip
+# Download from: https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-windows-x86_64.zip
 # Extract and add to PATH
 ```
 
@@ -149,7 +150,41 @@ curl http://127.0.0.1:8080/api
 
 ---
 
-### 2️⃣ Reverse Proxy
+### 2️⃣ Multiple Services (Recommended for Complex Scenarios)
+
+**Scenario**: Run forward proxy and reverse proxy server simultaneously
+
+**Configuration** (`config.toml`):
+```toml
+# Forward proxy rules
+[[proxies]]
+local = "8080"
+remote = "api.example.com:443"
+
+[[proxies]]
+local = "3000"
+remote = "db.example.com:5432"
+
+# Reverse proxy server
+[reverse_proxy_server]
+port = 9001
+allowed_tokens = ["my-secret-token"]
+```
+
+**Run**:
+```bash
+gsc-fq -c config.toml
+```
+
+**What happens**:
+- ✅ Forward proxy on port 8080 → api.example.com:443
+- ✅ Forward proxy on port 3000 → db.example.com:5432
+- ✅ Reverse proxy server on port 9001
+- All services start automatically based on config
+
+---
+
+### 3️⃣ Reverse Proxy
 
 **Scenario**: Expose internal service to public internet via stealth tunnel
 
@@ -187,7 +222,7 @@ gsc-fq -c config-client.toml
 
 ---
 
-### 3️⃣ TOTP Dynamic Verification
+### 4️⃣ TOTP Dynamic Verification
 
 **Step 1**: Generate TOTP secret
 ```bash
@@ -234,7 +269,7 @@ gsc-fq -c config-client.toml
 
 ### Comparison with Other Solutions
 
-| Metric | GSC-FQ v0.9.0 | Nginx (stream) | HAProxy | socat |
+| Metric | GSC-FQ v0.9.1 | Nginx (stream) | HAProxy | socat |
 |--------|--------------|---------------|---------|-------|
 | Throughput (macOS) | **9.15 GB/s** | 2.1 GB/s | 1.8 GB/s | 1.2 GB/s |
 | Memory Usage (10MB) | **1.63 MB** | 5.2 MB | 4.8 MB | 10 MB+ |
@@ -268,24 +303,22 @@ gsc-fq -c config-client.toml
 
 ## 📋 Configuration Examples
 
-### Complete Config File Example
+### Complete Configuration Example
 
 ```toml
-# ==================== Forward Proxy Configuration ====================
+# ==================== Forward Proxy ====================
+# All configured services start automatically - no mode selection needed
 
-# Local 8080 -> Remote API
 [[proxies]]
 local = "8080"
 remote = "api.example.com:443"
 
-# Local 3000 -> Remote database
 [[proxies]]
 local = "3000"
 remote = "db.example.com:5432"
 
-# ==================== Reverse Proxy Configuration ====================
+# ==================== Reverse Proxy Server ====================
 
-# Control server configuration
 [reverse_proxy_server]
 port = 9001
 allowed_tokens = ["token1", "token2"]
@@ -299,7 +332,8 @@ min_idle = 5
 max_size = 100
 idle_timeout = 300
 
-# Reverse proxy client
+# ==================== Reverse Proxy Client ====================
+
 [reverse_proxy_client]
 server = "PUBLIC_IP:9001"
 token = "token1"
@@ -317,7 +351,7 @@ local = "127.0.0.1:8080"
 server_port = "22"         # SSH
 local = "127.0.0.1:22"
 
-# ==================== UDP Forwarding Configuration ====================
+# ==================== UDP Forwarding ====================
 
 [[udp_proxies]]
 local = "127.0.0.1:53"
@@ -331,6 +365,12 @@ file = "/var/log/gsc-fq.log"
 max_size = "100MB"
 max_backups = 7
 ```
+
+**Important**: All services in the config file will start automatically. You can mix and match any combination:
+- `[[proxies]]` - Forward proxy rules
+- `[reverse_proxy_server]` - Reverse proxy server
+- `[reverse_proxy_client]` - Reverse proxy client
+- `[[udp_proxies]]` - UDP forwarding
 
 ---
 
@@ -472,7 +512,13 @@ Contributions are welcome! Please follow these steps:
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed update history.
 
-### v0.9.0 (2026-01-12) - Latest
+### v0.9.1 (2026-01-12) - Latest
+
+- ✅ **Multiple Services**: All services start automatically based on config file
+- 🚀 **Configuration-Driven**: No need to specify modes, just configure what you need
+- 🐛 **Bug Fixes**: Removed single-mode limitation
+
+### v0.9.0 (2026-01-12)
 
 - 🚀 **Performance**: macOS 4.02x speedup, Linux splice() zero-copy
 - 🧪 **Testing**: E2E coverage 48% → 91%
@@ -521,7 +567,7 @@ idle_timeout = 600    # Extend idle timeout
 docker run -d \
   -v $(pwd)/config.toml:/app/config.toml \
   -p 8080:8080 \
-  ghcr.io/putao520/gsc-fq:v0.9.0
+  ghcr.io/putao520/gsc-fq:v0.9.1
 ```
 
 ---
