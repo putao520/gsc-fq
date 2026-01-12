@@ -316,14 +316,15 @@ impl ProxyInstance {
     pub async fn start(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<()> {
         self.running = true;
 
-        // Start connection pool if enabled
+        // Start connection pool if enabled (同步等待，确保预热完成)
         if let Some(pool) = &self.connection_pool {
-            let pool_clone = pool.clone();
-            tokio::spawn(async move {
-                if let Err(e) = pool_clone.start().await {
-                    debug_println!("Connection pool background start failed: {}", e);
-                }
-            });
+            debug_println!("Starting connection pool...");
+            if let Err(e) = pool.start().await {
+                error_println!("Connection pool start failed: {}", e);
+                // 即使连接池启动失败，也不中断服务，fallback 到直接连接
+            } else {
+                debug_println!("Connection pool started successfully");
+            }
         }
 
         // Create optimized TCP listener

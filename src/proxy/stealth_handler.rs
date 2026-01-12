@@ -55,25 +55,20 @@ impl StealthHandler {
             }
         }
 
-        // Fallback: test the remote connection
-        match Self::test_remote_connection(remote_addr).await {
-            Ok(()) => {
-                // Remote is responsive, use normal forwarding
-                debug_println!("Remote server responsive, using normal forwarding");
-
-                // Re-establish connection for forwarding
-                let remote = TcpStream::connect(remote_addr).await.map_err(|e| {
-                    ProxyError::ForwardingFailed(format!("Connection failed: {}", e))
-                })?;
+        // Fallback: 直接建立连接（不测试，避免建立2次连接）
+        match TcpStream::connect(remote_addr).await {
+            Ok(remote) => {
+                debug_println!("Direct connection established to {}", remote_addr);
                 Self::normal_forwarding(client, remote).await
             }
             Err(e) => {
-                // Check if it's a rejection
-                if Self::is_rejection(&e) {
+                // 检查是否是拒绝连接
+                let error_msg = e.to_string();
+                if Self::is_io_rejection(&e) || Self::is_connection_error_rejection(&error_msg) {
                     debug_println!("🕳️  Server rejection detected, entering blackhole mode");
                     Self::enter_blackhole_mode(client).await
                 } else {
-                    Err(e)
+                    Err(ProxyError::ForwardingFailed(format!("Connection failed: {}", e)))
                 }
             }
         }
@@ -116,6 +111,15 @@ impl StealthHandler {
                 | std::io::ErrorKind::ConnectionAborted
                 | std::io::ErrorKind::BrokenPipe
         )
+    }
+
+    /// 检查连接错误消息是否表示拒绝
+    fn is_connection_error_rejection(error_msg: &str) -> bool {
+        error_msg.contains("refused")
+            || error_msg.contains("reset")
+            || error_msg.contains("rejected")
+            || error_msg.contains("timeout")
+            || error_msg.contains("connection")
     }
 
     /// Enter blackhole mode - keep client connected but discard all data

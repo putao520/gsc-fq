@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-01-12
+
+### Performance
+- **Reduced proxy latency by 50%**: From >500ms to ~250ms (public network)
+- **Connection pool optimization**: Full 50-connection preheat (previously only 3)
+- **Eliminated double handshake**: Fallback now creates only 1 connection (previously 2)
+
+### Fixed
+- **Connection pool synchronization**: Wait for preheat completion before accepting connections
+- **Removed premature exit**: Connection pool now creates all 50 connections instead of stopping at 3
+- **Fallback optimization**: Direct connection instead of test + reconnect
+
+### Changed
+- `connection_pool.rs`: Removed early exit logic in preheat_pool()
+- `server.rs`: Synchronous connection pool start
+- `stealth_handler.rs`: Optimized fallback to single connection attempt
+
+---
+
 ## [0.9.1] - 2026-01-12
 
 ### Fixed

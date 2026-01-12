@@ -126,13 +126,6 @@ impl ConnectionPool {
                     // 成功连接，重置连续失败计数
                     consecutive_failures = 0;
                     self.stats.consecutive_failures.store(0, Ordering::Relaxed);
-
-                    // 如果已经有成功连接，且成功率达到一定比例，可以提前结束预热
-                    let created_count = self.stats.total_created.load(Ordering::Relaxed);
-                    if created_count >= 3 { // 至少有3个成功连接就足够测试了
-                        eprintln!("✅ Preheat completed: {} connections created", created_count);
-                        break;
-                    }
                 }
                 Err(e) => {
                     consecutive_failures += 1;
@@ -153,6 +146,12 @@ impl ConnectionPool {
                     // 失败但不达到黑洞阈值时，继续尝试剩余连接
                 }
             }
+        }
+
+        // 预热完成，打印实际创建的连接数
+        let created_count = self.stats.total_created.load(Ordering::Relaxed);
+        if created_count > 0 {
+            eprintln!("✅ Preheat completed: {} connections created", created_count);
         }
 
         Ok(())

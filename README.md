@@ -77,8 +77,8 @@ curl -sSLf https://raw.githubusercontent.com/putao520/gsc-fq/main/install.sh | s
 ### Option 3: Docker
 
 ```bash
-docker pull ghcr.io/putao520/gsc-fq:v0.9.1
-docker run -v $(pwd)/config.toml:/app/config.toml ghcr.io/putao520/gsc-fq:v0.9.1
+docker pull ghcr.io/putao520/gsc-fq:v0.9.2
+docker run -v $(pwd)/config.toml:/app/config.toml ghcr.io/putao520/gsc-fq:v0.9.2
 ```
 
 ### Option 4: Pre-built Binaries
@@ -87,35 +87,35 @@ Download pre-built binaries from [GitHub Releases](https://github.com/putao520/g
 
 **Linux** (x86_64):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-linux-x86_64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.2/gsc-fq-linux-x86_64.tar.gz
 tar xzf gsc-fq-linux-x86_64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **Linux** (aarch64):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-linux-aarch64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.2/gsc-fq-linux-aarch64.tar.gz
 tar xzf gsc-fq-linux-aarch64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **macOS** (Intel):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-macos-x86_64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.2/gsc-fq-macos-x86_64.tar.gz
 tar xzf gsc-fq-macos-x86_64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **macOS** (Apple Silicon):
 ```bash
-wget https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-macos-aarch64.tar.gz
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.2/gsc-fq-macos-aarch64.tar.gz
 tar xzf gsc-fq-macos-aarch64.tar.gz
 sudo mv gsc-fq /usr/local/bin/
 ```
 
 **Windows** (x86_64):
 ```powershell
-# Download from: https://github.com/putao520/gsc-fq/releases/download/v0.9.1/gsc-fq-windows-x86_64.zip
+# Download from: https://github.com/putao520/gsc-fq/releases/download/v0.9.2/gsc-fq-windows-x86_64.zip
 # Extract and add to PATH
 ```
 
@@ -269,7 +269,7 @@ gsc-fq -c config-client.toml
 
 ### Comparison with Other Solutions
 
-| Metric | GSC-FQ v0.9.1 | Nginx (stream) | HAProxy | socat |
+| Metric | GSC-FQ v0.9.2 | Nginx (stream) | HAProxy | socat |
 |--------|--------------|---------------|---------|-------|
 | Throughput (macOS) | **9.15 GB/s** | 2.1 GB/s | 1.8 GB/s | 1.2 GB/s |
 | Memory Usage (10MB) | **1.63 MB** | 5.2 MB | 4.8 MB | 10 MB+ |
@@ -512,7 +512,7 @@ Contributions are welcome! Please follow these steps:
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed update history.
 
-### v0.9.1 (2026-01-12) - Latest
+### v0.9.2 (2026-01-12) - Latest
 
 - ✅ **Multiple Services**: All services start automatically based on config file
 - 🚀 **Configuration-Driven**: No need to specify modes, just configure what you need
@@ -567,7 +567,7 @@ idle_timeout = 600    # Extend idle timeout
 docker run -d \
   -v $(pwd)/config.toml:/app/config.toml \
   -p 8080:8080 \
-  ghcr.io/putao520/gsc-fq:v0.9.1
+  ghcr.io/putao520/gsc-fq:v0.9.2
 ```
 
 ---

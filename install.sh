@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION="${VERSION:-v0.9.1}"
+VERSION="${VERSION:-v0.9.2}"
 REPO="putao520/gsc-fq"
 BINARY_NAME="gsc-fq"
 
