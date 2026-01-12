@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION=${VERSION:-"$(cargo metadata --no-deps | grep '\"version\"' | head -1 | awk -F\" '{print $4}')"}
+VERSION=${VERSION:-"$(grep '^version = ' Cargo.toml | head -1 | awk -F\" '{print $2}')"}
 RELEASE_DIR="release"
 
 echo "🚀 Building GSC-FQ v${VERSION} for current platform"
