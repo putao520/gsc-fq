@@ -80,14 +80,45 @@ docker pull ghcr.io/putao520/gsc-fq:v0.9.0
 docker run -v $(pwd)/config.toml:/app/config.toml ghcr.io/putao520/gsc-fq:v0.9.0
 ```
 
-### Option 4: Build from Source
+### Option 4: Pre-built Binaries
 
+Download pre-built binaries from [GitHub Releases](https://github.com/putao520/gsc-fq/releases):
+
+**Linux** (x86_64):
 ```bash
-git clone https://github.com/putao520/gsc-fq.git
-cd gsc-fq
-cargo build --release
-# Binary located at target/release/gsc-fq
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-linux-x86_64.tar.gz
+tar xzf gsc-fq-linux-x86_64.tar.gz
+sudo mv gsc-fq /usr/local/bin/
 ```
+
+**Linux** (aarch64):
+```bash
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-linux-aarch64.tar.gz
+tar xzf gsc-fq-linux-aarch64.tar.gz
+sudo mv gsc-fq /usr/local/bin/
+```
+
+**macOS** (Intel):
+```bash
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-macos-x86_64.tar.gz
+tar xzf gsc-fq-macos-x86_64.tar.gz
+sudo mv gsc-fq /usr/local/bin/
+```
+
+**macOS** (Apple Silicon):
+```bash
+wget https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-macos-aarch64.tar.gz
+tar xzf gsc-fq-macos-aarch64.tar.gz
+sudo mv gsc-fq /usr/local/bin/
+```
+
+**Windows** (x86_64):
+```powershell
+# Download from: https://github.com/putao520/gsc-fq/releases/download/v0.9.0/gsc-fq-windows-x86_64.zip
+# Extract and add to PATH
+```
+
+### Option 5: Build from Source
 
 ---
 
