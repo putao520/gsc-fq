@@ -286,13 +286,21 @@ pub struct ReverseProxyClientSection {
 
 impl ConfigFile {
     /// Determine runtime mode from configuration
+    /// 注意：此方法仅用于日志显示，实际运行时会根据配置启动所有服务
     pub fn get_runtime_mode(&self) -> String {
-        if self.reverse_proxy_client.is_some() {
+        let has_forward = !self.proxies.is_empty();
+        let has_reverse_server = self.reverse_proxy_server.is_some();
+        let has_reverse_client = self.reverse_proxy_client.is_some();
+
+        // 根据优先级显示主模式（用于日志）
+        if has_reverse_client {
             "reverse_client".to_string()
-        } else if self.reverse_proxy_server.is_some() {
+        } else if has_reverse_server {
             "reverse_server".to_string()
-        } else {
+        } else if has_forward {
             "forward".to_string()
+        } else {
+            "unknown".to_string()
         }
     }
 

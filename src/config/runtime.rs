@@ -6,88 +6,26 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-/// Runtime mode enum
-#[derive(Debug, Clone, PartialEq)]
-pub enum RunMode {
-    Forward,       // Forward proxy mode (default)
-    ReverseServer, // Reverse proxy server mode
-    ReverseClient, // Reverse proxy client mode
-}
-
-impl RunMode {
-    /// Parse mode from string
-    pub fn from_str(mode: &str) -> Self {
-        match mode.to_lowercase().trim() {
-            "forward" | "proxy" => RunMode::Forward,
-            "reverse_server" | "server" | "reverse-server" => RunMode::ReverseServer,
-            "reverse_client" | "client" | "reverse-client" => RunMode::ReverseClient,
-            _ => {
-                eprintln!(
-                    "⚠️  Unknown runtime mode '{}', using 'forward' as fallback",
-                    mode
-                );
-                RunMode::Forward
-            }
-        }
-    }
-
-    /// Get mode as string
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RunMode::Forward => "forward",
-            RunMode::ReverseServer => "reverse_server",
-            RunMode::ReverseClient => "reverse_client",
-        }
-    }
-}
-
-/// Runtime manager handles different execution modes
+/// Runtime manager handles starting all configured services
 pub struct RuntimeManager {
     config: ConfigFile,
     config_path: PathBuf,
-    mode: RunMode,
 }
 
 impl RuntimeManager {
     /// Create new runtime manager by loading configuration from search paths
     pub fn new() -> Result<Self> {
         let (config, config_path) = ConfigLoader::load_with_search()?;
-        let mode_str = config.get_runtime_mode();
-        let mode = RunMode::from_str(&mode_str);
 
         eprintln!(
-            "🚀 Runtime mode: {} (config: {})",
-            mode.as_str(),
+            "🚀 Loading configuration: {}",
             config_path.display()
         );
 
         Ok(Self {
             config,
             config_path,
-            mode,
         })
-    }
-
-    /// Create runtime manager with specific mode (override config)
-    pub fn new_with_mode(mode: RunMode) -> Result<Self> {
-        let (config, config_path) = ConfigLoader::load_with_search()?;
-
-        eprintln!(
-            "🚀 Runtime mode: {} (overridden, config: {})",
-            mode.as_str(),
-            config_path.display()
-        );
-
-        Ok(Self {
-            config,
-            config_path,
-            mode,
-        })
-    }
-
-    /// Get current mode
-    pub fn mode(&self) -> &RunMode {
-        &self.mode
     }
 
     /// Get configuration reference
@@ -100,7 +38,7 @@ impl RuntimeManager {
         &self.config_path
     }
 
-    /// Run the appropriate mode
+    /// Run all configured services
     pub async fn run(&self) -> Result<()> {
         // Initialize debug system from config
         let debug_enabled = self
@@ -111,107 +49,89 @@ impl RuntimeManager {
             .unwrap_or(false);
         crate::utils::debug::init_debug(debug_enabled);
 
-        match self.mode {
-            RunMode::Forward => self.run_forward_proxy().await,
-            RunMode::ReverseServer => self.run_reverse_server().await,
-            RunMode::ReverseClient => self.run_reverse_client().await,
-        }
-    }
-
-    /// Run forward proxy mode
-    async fn run_forward_proxy(&self) -> Result<()> {
-        eprintln!("📡 Starting forward proxy mode...");
-
-        if self.config.proxies.is_empty() {
-            eprintln!("❌ No proxy configurations found in config file!");
-            return Err(AppError::Config(
-                crate::error::ConfigError::InvalidConfigValue {
-                    path: "proxies".to_string(),
-                    reason: "No proxy configurations found".to_string(),
-                },
-            ));
-        }
-
         // Parse bind IP from config
         let bind_ip: IpAddr = if let Some(server_section) = &self.config.server {
             if let Some(bind_ip_str) = &server_section.bind_ip {
                 ConfigLoader::parse_ip_address(bind_ip_str)?
             } else {
-                "127.0.0.1".parse().unwrap()
+                "0.0.0.0".parse().unwrap()
             }
         } else {
-            "127.0.0.1".parse().unwrap()
+            "0.0.0.0".parse().unwrap()
         };
 
-        let mut server = ProxyServerBuilder::new()
-            .bind_ip(bind_ip)
-            .add_proxies(self.config.proxies.clone())
-            .build()?;
+        let mut handles = Vec::new();
 
-        server.start().await?;
-        Ok(())
-    }
+        // Start forward proxy if configured
+        if !self.config.proxies.is_empty() {
+            eprintln!("📡 Starting forward proxy with {} rules...", self.config.proxies.len());
 
-    /// Run reverse proxy server mode
-    async fn run_reverse_server(&self) -> Result<()> {
-        eprintln!("🏠 Starting reverse proxy server mode...");
+            let mut forward_server = ProxyServerBuilder::new()
+                .bind_ip(bind_ip)
+                .add_proxies(self.config.proxies.clone())
+                .build()?;
 
-        let control_port = if let Some(server) = &self.config.reverse_proxy_server {
-            server.port // 符合SPEC：从reverse_proxy_server获取端口
-        } else {
-            9001 // 符合SPEC：默认控制端口（ARCH-REVERSE-004）
-        };
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = forward_server.start().await {
+                    eprintln!("❌ Forward proxy error: {}", e);
+                }
+            }));
+        }
 
-        // Get bind IP
-        let bind_ip: IpAddr = self
-            .config
-            .server
-            .as_ref()
-            .and_then(|s| s.bind_ip.as_ref())
-            .and_then(|ip| ip.parse().ok())
-            .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
+        // Start reverse proxy server if configured
+        if let Some(server_config) = &self.config.reverse_proxy_server {
+            let control_port = server_config.port;
+            eprintln!("🏠 Starting reverse proxy server on port {}...", control_port);
 
-        eprintln!("🔧 Control port: {}, Bind IP: {}", control_port, bind_ip);
+            let mut reverse_server = ReverseProxyServer::new(bind_ip, control_port);
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = reverse_server.start().await {
+                    eprintln!("❌ Reverse proxy server error: {}", e);
+                }
+            }));
+        }
 
-        let mut server = ReverseProxyServer::new(bind_ip, control_port);
-        server.start().await
-    }
+        // Start reverse proxy client if configured
+        if let Some(client_config) = &self.config.reverse_proxy_client {
+            let server_address = client_config.server.clone();
+            eprintln!("🌐 Starting reverse proxy client connecting to {}...", server_address);
 
-    /// Run reverse proxy client mode
-    async fn run_reverse_client(&self) -> Result<()> {
-        eprintln!("🌐 Starting reverse proxy client mode...");
+            let server_addr: SocketAddr = server_address.parse().map_err(|_| AppError::Internal {
+                message: format!("Invalid server address: {}", server_address),
+            })?;
 
-        let server_address = if let Some(client) = &self.config.reverse_proxy_client {
-            client.server.clone() // 符合SPEC：从reverse_proxy_client获取地址
-        } else {
-            eprintln!("❌ No reverse_proxy_client configuration found!");
-            return Err(AppError::Config(
-                crate::error::ConfigError::MissingRequiredField("reverse_proxy_client".to_string()),
-            ));
-        };
+            let config = self.config.clone();
+            handles.push(tokio::spawn(async move {
+                let mut client = ReverseProxyClient::new(server_addr, config);
+                if let Err(e) = client.start().await {
+                    eprintln!("❌ Reverse proxy client error: {}", e);
+                }
+            }));
+        }
 
-        let server_addr: SocketAddr = server_address.parse().map_err(|_| AppError::Internal {
-            message: format!("Invalid server address: {}", server_address),
-        })?;
-
-        if self.config.reverse_proxies.is_empty() {
-            eprintln!("❌ No reverse_proxies configured in config file!");
+        // Check if any service was started
+        if handles.is_empty() {
+            eprintln!("❌ No services configured! Please add one of the following to your config file:");
+            eprintln!("   - [[proxies]] for forward proxy");
+            eprintln!("   - [reverse_proxy_server] for reverse proxy server");
+            eprintln!("   - [reverse_proxy_client] for reverse proxy client");
             return Err(AppError::Config(
                 crate::error::ConfigError::InvalidConfigValue {
-                    path: "reverse_proxies".to_string(),
-                    reason: "No reverse proxy configurations found".to_string(),
+                    path: "config".to_string(),
+                    reason: "No services configured".to_string(),
                 },
             ));
         }
 
-        eprintln!("🔗 Connecting to server: {}", server_addr);
-        eprintln!(
-            "📋 Reverse proxy rules: {}",
-            self.config.reverse_proxies.len()
-        );
+        eprintln!("✅ All services started successfully!");
 
-        let mut client = ReverseProxyClient::new(server_addr, self.config.clone());
-        client.start().await
+        // Wait for all services (any error will terminate the program)
+        match futures::future::select_all(handles).await.0 {
+            Ok(_) => Ok(()),
+            Err(e) => Err(AppError::Internal {
+                message: format!("Service task failed: {}", e),
+            }),
+        }
     }
 
     /// Print configuration search paths for debugging
