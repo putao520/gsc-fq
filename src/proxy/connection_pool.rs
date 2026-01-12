@@ -186,7 +186,44 @@ impl ConnectionPool {
             }
         }
 
-        // 池空或连接失效，现场创建
+        // 池空或连接失效，立即触发同步补充（不等待）
+        let pool = Arc::clone(&self.pool);
+        let remote_addr = self.remote_addr;
+        let source_ip = self.source_ip;
+        let stats = Arc::clone(&self.stats);
+        let semaphore = Arc::clone(&self.semaphore);
+
+        tokio::spawn(async move {
+            if let Ok(_permit) = semaphore.try_acquire() {
+                match Self::create_connection(remote_addr, source_ip).await {
+                    Ok(stream) => {
+                        pool.lock().await.push_back(stream);
+                        stats.total_created.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(_) => {
+                        stats.connection_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        });
+
+        // 短暂等待，让补充任务有机会完成
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // 再次尝试从池中获取（可能拿到刚补充的连接）
+        if let Some(stream) = self.pool.lock().await.pop_front() {
+            self.stats.pool_hits.fetch_add(1, Ordering::Relaxed);
+
+            if Self::is_connection_alive(&stream).await {
+                self.stats.consecutive_failures.store(0, Ordering::Relaxed);
+                self.spawn_refill_task();
+                return Ok(stream);
+            } else {
+                drop(stream);
+            }
+        }
+
+        // 池还是空，现场创建给应用
         self.stats.pool_misses.fetch_add(1, Ordering::Relaxed);
 
         match Self::create_connection(self.remote_addr, self.source_ip).await {
