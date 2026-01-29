@@ -1,11 +1,7 @@
 use crate::debug_println;
 use crate::error::types::ProxyError;
-use crate::proxy::ConnectionPool;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-/// Stealth handler with blackhole mode for hiding protocol signatures
-/// Detects server rejections and enters blackhole mode to confuse active probing
 use tokio::net::TcpStream;
 
 use crate::proxy::zero_copy::zero_copy_bidirectional;
@@ -36,34 +32,18 @@ impl StealthHandler {
     pub async fn handle_stealth(
         client: TcpStream,
         remote_addr: std::net::SocketAddr,
-        connection_pool: Option<Arc<ConnectionPool>>,
+        _connection_pool: Option<()>, // Ignored, kept for backward compatibility
     ) -> Result<(), ProxyError> {
-        // Try to acquire connection from pool first
-        if let Some(pool) = connection_pool {
-            match pool.acquire().await {
-                Ok(remote) => {
-                    debug_println!("✅ Acquired connection from pool");
-                    return Self::normal_forwarding(client, remote).await;
-                }
-                Err(e) => {
-                    debug_println!(
-                        "⚠️  Pool acquisition failed: {}, falling back to direct connection",
-                        e
-                    );
-                    // Fall through to direct connection
-                }
-            }
-        }
-
-        // Fallback: 直接建立连接（不测试，避免建立2次连接）
+        // Direct connection to remote server
         match TcpStream::connect(remote_addr).await {
             Ok(remote) => {
-                debug_println!("Direct connection established to {}", remote_addr);
+                debug_println!("✅ Connected to {}", remote_addr);
                 Self::normal_forwarding(client, remote).await
             }
             Err(e) => {
-                // 检查是否是拒绝连接
+                // Check if it's a rejection
                 let error_msg = e.to_string();
+                debug_println!("❌ Connection failed to {}: {}", remote_addr, error_msg);
                 if Self::is_io_rejection(&e) || Self::is_connection_error_rejection(&error_msg) {
                     debug_println!("🕳️  Server rejection detected, entering blackhole mode");
                     Self::enter_blackhole_mode(client).await

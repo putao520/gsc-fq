@@ -2,17 +2,15 @@ use crate::debug_println;
 use crate::error::types::ProxyError;
 use crate::error::Result;
 use crate::proxy::stealth_handler::StealthHandler;
-use crate::proxy::ConnectionPool;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-/// Stealth connection handler with blackhole mode
-/// Replaces EnhancedConnectionHandler to enable blackhole functionality
+use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;
 
-/// Stealth connection handler that includes blackhole mode
+/// Stealth connection handler
 #[derive(Clone)]
 #[allow(dead_code)] // source_ip field reserved for future functionality
 pub struct StealthConnectionHandler {
@@ -20,7 +18,6 @@ pub struct StealthConnectionHandler {
     #[allow(dead_code)] // Reserved for future source IP binding functionality
     source_ip: Option<std::net::IpAddr>,
     stats: Arc<StealthConnectionCounters>,
-    connection_pool: Option<Arc<ConnectionPool>>,
     udp_sessions: Arc<Mutex<HashMap<SocketAddr, Arc<UdpSocket>>>>,
     allow_ips: Option<Vec<String>>,
     max_conns_per_ip: Option<usize>,
@@ -49,7 +46,7 @@ impl StealthConnectionHandler {
     pub fn new(
         remote_addr: SocketAddr,
         source_ip: Option<std::net::IpAddr>,
-        connection_pool: Option<Arc<ConnectionPool>>,
+        _connection_pool: Option<()>, // Ignored, kept for backward compatibility
         allow_ips: Option<Vec<String>>,
         max_conns_per_ip: Option<usize>,
         cps_limit: Option<f64>,
@@ -58,7 +55,6 @@ impl StealthConnectionHandler {
             remote_addr,
             source_ip,
             stats: Arc::new(StealthConnectionCounters::new()),
-            connection_pool,
             udp_sessions: Arc::new(Mutex::new(HashMap::new())),
             allow_ips,
             max_conns_per_ip,
@@ -88,7 +84,7 @@ impl StealthConnectionHandler {
         let client = self.apply_tcp_optimizations(client).await?;
 
         // Use StealthHandler which includes blackhole mode
-        match StealthHandler::handle_stealth(client, self.remote_addr, self.connection_pool.clone())
+        match StealthHandler::handle_stealth(client, self.remote_addr, None)
             .await
         {
             Ok(()) => {
@@ -311,8 +307,6 @@ impl StealthConnectionHandler {
         Ok(())
     }
 }
-
-use std::time::Duration;
 
 /// Connection statistics for stealth handler
 #[derive(Debug, Default)]

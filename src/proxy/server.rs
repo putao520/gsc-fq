@@ -1,6 +1,6 @@
 use crate::config::loader::{ConfigLoader, ProxySection};
 use crate::error::{NetworkError, Result};
-use crate::proxy::{ConnectionPool, StealthConnectionHandler};
+use crate::proxy::StealthConnectionHandler;
 use crate::{debug_println, error_println};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
@@ -257,7 +257,6 @@ pub struct ProxyInstance {
     remote_addr: SocketAddr,
     source_ip: Option<IpAddr>,
     connection_handler: Arc<StealthConnectionHandler>,
-    connection_pool: Option<Arc<ConnectionPool>>,
     running: bool,
 }
 
@@ -271,7 +270,6 @@ impl ProxyInstance {
             source_ip: original.source_ip,
             // Share the existing connection handler so remote metadata remains intact.
             connection_handler: Arc::clone(&original.connection_handler),
-            connection_pool: original.connection_pool.clone(),
             running: false,
         }
     }
@@ -288,15 +286,11 @@ impl ProxyInstance {
     ) -> Result<Self> {
         let bind_addr = SocketAddr::new(bind_ip, local_port);
 
-        // 始终启用连接池（使用内置安全策略）
-        let pool = ConnectionPool::new(remote_addr, source_ip);
-        let connection_pool = Some(Arc::new(pool));
-
-        // Create stealth connection handler with blackhole capabilities
+        // Create stealth connection handler (without connection pool)
         let connection_handler = Arc::new(StealthConnectionHandler::new(
             remote_addr,
             source_ip,
-            connection_pool.clone(),
+            None, // No connection pool
             allow_ips,
             max_conns_per_ip,
             cps_limit,
@@ -307,7 +301,6 @@ impl ProxyInstance {
             remote_addr,
             source_ip,
             connection_handler,
-            connection_pool,
             running: false,
         })
     }
@@ -315,17 +308,6 @@ impl ProxyInstance {
     /// Start the proxy instance
     pub async fn start(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<()> {
         self.running = true;
-
-        // Start connection pool if enabled (同步等待，确保预热完成)
-        if let Some(pool) = &self.connection_pool {
-            debug_println!("Starting connection pool...");
-            if let Err(e) = pool.start().await {
-                error_println!("Connection pool start failed: {}", e);
-                // 即使连接池启动失败，也不中断服务，fallback 到直接连接
-            } else {
-                debug_println!("Connection pool started successfully");
-            }
-        }
 
         // Create optimized TCP listener
         let listener = self.create_optimized_listener().await?;

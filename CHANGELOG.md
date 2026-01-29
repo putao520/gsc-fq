@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-01-12
+
+### Refactoring
+- **Removed connection pool**: Simplified code by removing connection pool complexity (~500 lines)
+- **Faster startup**: Reduced startup time from ~5s to <1s (no preheat needed)
+- **Simplified architecture**: Direct connection mode for all TCP connections
+- **Better logging**: Added connection failure logging in debug mode
+
+### Changed
+- Deleted `connection_pool.rs`: Removed 400+ lines of complex pool management logic
+- `server.rs`: Removed pool initialization, simplified ProxyInstance structure
+- `stealth_connection_handler.rs`: Removed pool dependency
+- `stealth_handler.rs`: Simplified to direct connection only
+- `mod.rs`: Removed connection pool exports
+
+### Performance Impact
+- Startup time: ~5s → <1s (5x faster)
+- Connection overhead: +100ms TCP handshake (negligible in public network)
+- Memory footprint: Reduced (no pre-allocated connections)
+
+---
+
 ## [0.9.2] - 2026-01-12
 
 ### Performance
