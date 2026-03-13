@@ -52,7 +52,7 @@ libc = "0.2"  # Linux 系统调用（splice、pipe、fcntl 等）
 nix = { version = "0.30", features = ["socket", "net", "uio", "zerocopy"] }
 
 # 多路复用
-yamux = "0.13.8"
+yamux = "0.13.10"
 
 # 工具库
 bytes = "1.11"
